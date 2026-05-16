@@ -1,0 +1,123 @@
+package eu.darken.octi.desktop.storage
+
+import eu.darken.octi.desktop.common.files.AtomicWrites
+import eu.darken.octi.desktop.common.log.log
+import eu.darken.octi.desktop.common.log.logTag
+import eu.darken.octi.desktop.platform.PlatformDetector
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import java.io.IOException
+import java.nio.channels.FileChannel
+import java.nio.channels.FileLock
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.StandardOpenOption
+import java.util.concurrent.locks.ReentrantReadWriteLock
+import kotlin.concurrent.read
+import kotlin.concurrent.write
+
+private val TAG = logTag("Settings")
+
+/**
+ * On-disk JSON settings store. Non-secret app preferences only — credentials live in [Keystore].
+ *
+ * Atomic writes via [AtomicWrites]. Cross-process [FileLock] held only across read/write
+ * operations to keep multiple desktop instances from corrupting each other's settings.
+ */
+class Settings private constructor(
+    private val file: Path,
+    private val json: Json,
+    initial: SettingsData,
+) {
+
+    private val cacheLock = ReentrantReadWriteLock()
+    private var cache: SettingsData = initial
+
+    val data: SettingsData
+        get() = cacheLock.read { cache }
+
+    fun update(transform: (SettingsData) -> SettingsData) {
+        val updated = cacheLock.write {
+            val next = transform(cache)
+            if (next.schemaVersion != cache.schemaVersion) {
+                error("Cannot bump schemaVersion via update(); use a migration.")
+            }
+            cache = next
+            next
+        }
+        persist(updated)
+    }
+
+    private fun persist(data: SettingsData) = withFileLock {
+        val bytes = json.encodeToString(SettingsData.serializer(), data).toByteArray(Charsets.UTF_8)
+        AtomicWrites.writeBytes(file, bytes)
+    }
+
+    private fun <T> withFileLock(block: () -> T): T {
+        Files.createDirectories(file.parent)
+        val lockPath = file.resolveSibling("${file.fileName}.lock")
+        FileChannel.open(
+            lockPath,
+            StandardOpenOption.CREATE,
+            StandardOpenOption.WRITE,
+        ).use { channel ->
+            val lock: FileLock = channel.lock()
+            try {
+                return block()
+            } finally {
+                lock.release()
+            }
+        }
+    }
+
+    companion object {
+
+        private const val SCHEMA_VERSION = 1
+
+        fun load(
+            json: Json = defaultJson,
+            file: Path = PlatformDetector.configDir().resolve("settings.json"),
+        ): Settings {
+            Files.createDirectories(file.parent)
+            val data = if (Files.exists(file)) {
+                val bytes = Files.readAllBytes(file)
+                try {
+                    val raw = json.decodeFromString(SettingsData.serializer(), bytes.toString(Charsets.UTF_8))
+                    migrate(raw)
+                } catch (e: Exception) {
+                    log(TAG, eu.darken.octi.desktop.common.log.Logging.Priority.WARN, e) {
+                        "settings.json unreadable; falling back to defaults"
+                    }
+                    SettingsData()
+                }
+            } else {
+                SettingsData()
+            }
+            return Settings(file, json, data).also { it.persist(data) }
+        }
+
+        private fun migrate(raw: SettingsData): SettingsData {
+            // Add migrations here as schemaVersion bumps.
+            return raw.copy(schemaVersion = SCHEMA_VERSION)
+        }
+
+        val defaultJson: Json = Json {
+            ignoreUnknownKeys = true
+            prettyPrint = true
+            encodeDefaults = true
+        }
+    }
+}
+
+@Serializable
+data class SettingsData(
+    val schemaVersion: Int = 1,
+    val deviceLabel: String? = null,
+    val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    val syncIntervalSeconds: Int = 300,
+    /** Clipboard auto-sync is opt-in for privacy reasons. See plan for rationale. */
+    val clipboardAutoSync: Boolean = false,
+)
+
+@Serializable
+enum class ThemeMode { SYSTEM, LIGHT, DARK }
