@@ -15,6 +15,7 @@ import eu.darken.octi.desktop.storage.Settings
 import eu.darken.octi.desktop.storage.keystore.Keystore
 import eu.darken.octi.desktop.storage.keystore.KeystoreFactory
 import eu.darken.octi.desktop.sync.DeviceListRepo
+import eu.darken.octi.desktop.sync.ModuleReader
 import eu.darken.octi.desktop.ui.nav.Navigator
 import eu.darken.octi.desktop.ui.nav.Screen
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -58,6 +59,7 @@ class AppGraph private constructor(
      * initialized first. Property-order matters: keep this below the [_activeClient] field.
      */
     val deviceListRepo: DeviceListRepo by lazy { DeviceListRepo(this) }
+    val moduleReader: ModuleReader by lazy { ModuleReader(this) }
 
     init {
         if (initialCredentials != null) {

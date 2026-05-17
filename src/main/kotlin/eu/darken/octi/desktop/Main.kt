@@ -19,6 +19,7 @@ import eu.darken.octi.desktop.common.log.logTag
 import eu.darken.octi.desktop.di.AppGraph
 import eu.darken.octi.desktop.ui.LocalAppGraph
 import eu.darken.octi.desktop.ui.dashboard.DashboardScreen
+import eu.darken.octi.desktop.ui.device.DeviceDetailScreen
 import eu.darken.octi.desktop.ui.linking.LinkingScreen
 import eu.darken.octi.desktop.ui.nav.Screen
 import eu.darken.octi.desktop.ui.theme.OctiTheme
@@ -64,9 +65,9 @@ private fun ScreenRouter(screen: Screen) {
     when (screen) {
         Screen.Linking -> LinkingScreen()
         Screen.Dashboard -> DashboardScreen()
+        is Screen.DeviceDetail -> DeviceDetailScreen(deviceId = screen.deviceId)
         else -> {
-            // Placeholder until the remaining screens (DeviceDetail, Files, Clipboard, Settings)
-            // land in D5+ phases.
+            // Files / Clipboard / Settings land in later phases.
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("Screen: $screen — UI lands in next commits")
             }
