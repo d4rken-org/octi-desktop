@@ -28,8 +28,12 @@ object Logging {
 
     @PublishedApi
     internal fun emit(tag: String, priority: Priority, message: String, throwable: Throwable?) {
-        val logger = LoggerFactory.getLogger(tag)
-        val redacted = Redactor.redact(message)
+        // logback uses '.' as its logger-hierarchy separator. Our tags use ':' (Android visual
+        // convention). Translate when looking up the slf4j logger so a single
+        // `<logger name="🐙">` rule in logback.xml applies to all child tags. The original
+        // `:`-separated tag still appears in the message body, preserving log output style.
+        val logger = LoggerFactory.getLogger(tag.replace(':', '.'))
+        val redacted = "[$tag] " + Redactor.redact(message)
         when (priority) {
             Priority.VERBOSE -> if (logger.isTraceEnabled) logger.trace(redacted, throwable)
             Priority.DEBUG -> if (logger.isDebugEnabled) logger.debug(redacted, throwable)
