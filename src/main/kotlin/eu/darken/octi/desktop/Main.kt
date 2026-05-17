@@ -18,6 +18,7 @@ import eu.darken.octi.desktop.common.log.log
 import eu.darken.octi.desktop.common.log.logTag
 import eu.darken.octi.desktop.di.AppGraph
 import eu.darken.octi.desktop.ui.LocalAppGraph
+import eu.darken.octi.desktop.ui.dashboard.DashboardScreen
 import eu.darken.octi.desktop.ui.linking.LinkingScreen
 import eu.darken.octi.desktop.ui.nav.Screen
 import eu.darken.octi.desktop.ui.theme.OctiTheme
@@ -62,8 +63,10 @@ private fun OctiDesktopApp() {
 private fun ScreenRouter(screen: Screen) {
     when (screen) {
         Screen.Linking -> LinkingScreen()
+        Screen.Dashboard -> DashboardScreen()
         else -> {
-            // Placeholder until the remaining screens land in D3-D5.
+            // Placeholder until the remaining screens (DeviceDetail, Files, Clipboard, Settings)
+            // land in D5+ phases.
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("Screen: $screen — UI lands in next commits")
             }
