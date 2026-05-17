@@ -107,11 +107,14 @@ class OctiServerHttpClient(
         }
 
         defaultRequest {
-            // Bake /v1 into the base URL — Ktor's defaultRequest URL merge takes the host/port
-            // from default but the path from per-call, so an `appendPathSegments("v1")` here
-            // gets clobbered the moment a call does its own appendPathSegments. Keeping the
-            // prefix on the host URL avoids the gotcha entirely.
-            url.takeFrom("${address.address}/v1/")
+            // Bake the version prefix into the base URL — Ktor's defaultRequest URL merge takes
+            // host/port from default but path from per-call, so an `appendPathSegments("v1")`
+            // here gets clobbered when a call does its own appendPathSegments. Keeping the
+            // prefix on the base URL avoids the gotcha. NO trailing slash: takeFrom with a
+            // trailing slash leaves an empty pathSegment at the end, then appendPathSegments
+            // appends after it and you get `/v1//foo` — which Ktor handles for REST but the
+            // WS upgrade endpoint rejects as 404.
+            url.takeFrom("${address.address}/v1")
             headers {
                 append(DeviceMetadata.HEADER_DEVICE_ID, deviceId.id)
                 append(DeviceMetadata.HEADER_VERSION, deviceMetadata.version)
