@@ -4,6 +4,7 @@ import eu.darken.octi.desktop.common.log.Logging
 import eu.darken.octi.desktop.common.log.log
 import eu.darken.octi.desktop.common.log.logTag
 import eu.darken.octi.desktop.di.AppGraph
+import eu.darken.octi.desktop.protocol.collections.fromGzip
 import eu.darken.octi.desktop.protocol.encryption.PayloadEncryption
 import eu.darken.octi.desktop.protocol.module.ModuleId
 import eu.darken.octi.desktop.protocol.octiserver.OctiServerHttpClient
@@ -31,6 +32,14 @@ class ModuleReader(private val graph: AppGraph) {
         data class Error(val cause: Throwable) : Result<Nothing>()
     }
 
+    /**
+     * AAD used for module-payload encryption. Matches Android's `OctiServerConnector
+     * .buildAssociatedData()` exactly — `${ownerDeviceId}:${moduleId}`. Tag verification fails
+     * if either side uses a different shape, so this is a wire-stable contract.
+     */
+    fun buildAad(ownerDeviceId: DeviceId, moduleId: ModuleId): ByteArray =
+        "${ownerDeviceId.id}:${moduleId.id}".toByteArray(Charsets.UTF_8)
+
     suspend fun <T> read(
         moduleId: ModuleId,
         targetDeviceId: DeviceId,
@@ -46,7 +55,13 @@ class ModuleReader(private val graph: AppGraph) {
                 OctiServerHttpClient.ModuleReadResult.NotFound -> Result.NotFound
                 is OctiServerHttpClient.ModuleReadResult.Ok -> {
                     val crypto = PayloadEncryption(keySet = credentials.encryptionKeyset)
-                    val plaintext = crypto.decrypt(response.payload.toByteString())
+                    // Android's OctiServerConnector encrypts each module payload with AAD bound
+                    // to `${ownerDeviceId}:${moduleId}` AND gzips before encrypting. Mirror both
+                    // — empty AAD or skipping gzip causes "decryption failed" on the GCM-SIV
+                    // tag check (verified against a real phone-written payload during testing).
+                    val aad = buildAad(targetDeviceId, moduleId)
+                    val decrypted = crypto.decrypt(response.payload.toByteString(), aad)
+                    val plaintext = decrypted.fromGzip()
                     val value: T = Serialization.json.decodeFromString(serializer, plaintext.utf8())
                     Result.Ok(value)
                 }

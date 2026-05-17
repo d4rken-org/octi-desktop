@@ -8,6 +8,7 @@ import eu.darken.octi.desktop.common.log.Logging.Priority.WARN
 import eu.darken.octi.desktop.common.log.log
 import eu.darken.octi.desktop.common.log.logTag
 import eu.darken.octi.desktop.di.AppGraph
+import eu.darken.octi.desktop.protocol.collections.toGzip
 import eu.darken.octi.desktop.protocol.encryption.EncryptionMode
 import eu.darken.octi.desktop.protocol.encryption.PayloadEncryption
 import eu.darken.octi.desktop.protocol.module.ModuleIds
@@ -205,7 +206,9 @@ class FileShareRepo(private val graph: AppGraph) {
         val crypto = PayloadEncryption(keySet = credentials.encryptionKeyset)
         val plaintext = Serialization.json.encodeToString(FileShareInfo.serializer(), info)
             .toByteArray(Charsets.UTF_8)
-        val ciphertext = crypto.encrypt(plaintext.toByteString()).toByteArray()
+        // Android wire format: gzip then encrypt with AAD = "${deviceId}:${moduleId}".
+        val aad = "${graph.deviceId.id}:${ModuleIds.FILES.id}".toByteArray(Charsets.UTF_8)
+        val ciphertext = crypto.encrypt(plaintext.toByteString().toGzip(), aad).toByteArray()
         val documentBase64 = Base64.Default.encode(ciphertext)
 
         val connectorIdString = currentConnectorIdString(credentials)

@@ -6,6 +6,7 @@ import eu.darken.octi.desktop.common.log.Logging.Priority.WARN
 import eu.darken.octi.desktop.common.log.log
 import eu.darken.octi.desktop.common.log.logTag
 import eu.darken.octi.desktop.di.AppGraph
+import eu.darken.octi.desktop.protocol.collections.toGzip
 import eu.darken.octi.desktop.protocol.encryption.PayloadEncryption
 import eu.darken.octi.desktop.protocol.module.ModuleIds
 import eu.darken.octi.desktop.protocol.modules.clipboard.ClipboardInfo
@@ -120,7 +121,9 @@ class ClipboardSync(private val graph: AppGraph) {
         val info = ClipboardInfo(type = ClipboardInfo.Type.SIMPLE_TEXT, data = bytes.toByteString())
         val plaintext = Serialization.json.encodeToString(ClipboardInfo.serializer(), info)
             .toByteArray(Charsets.UTF_8)
-        val ciphertext = crypto.encrypt(plaintext.toByteString()).toByteArray()
+        // Android wire format: gzip then encrypt with AAD = "${deviceId}:${moduleId}".
+        val aad = "${graph.deviceId.id}:${ModuleIds.CLIPBOARD.id}".toByteArray(Charsets.UTF_8)
+        val ciphertext = crypto.encrypt(plaintext.toByteString().toGzip(), aad).toByteArray()
         client.writeModule(ModuleIds.CLIPBOARD, ciphertext)
         lastPushedHash = hash
         log(TAG, DEBUG) { "Pushed clipboard payload (${bytes.size}B) to server" }

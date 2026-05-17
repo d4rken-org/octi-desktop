@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.launchIn
+import eu.darken.octi.desktop.protocol.collections.toGzip
 import okio.ByteString.Companion.toByteString
 import java.lang.ProcessHandle
 import java.net.InetAddress
@@ -71,7 +72,11 @@ class MetaWriter(private val graph: AppGraph) {
                     if (plaintext.contentEquals(lastWrittenPayload)) {
                         log(TAG, DEBUG) { "Meta payload unchanged since last write; skipping" }
                     } else {
-                        val ciphertext = crypto.encrypt(plaintext.toByteString()).toByteArray()
+                        // Android wire format: gzip BEFORE encrypt, AAD = "${deviceId}:${moduleId}".
+                        // See ModuleReader.buildAad for the rationale.
+                        val aad = "${graph.deviceId.id}:${ModuleIds.META.id}".toByteArray(Charsets.UTF_8)
+                        val gzipped = plaintext.toByteString().toGzip()
+                        val ciphertext = crypto.encrypt(gzipped, aad).toByteArray()
                         client.writeModule(ModuleIds.META, ciphertext)
                         lastWrittenPayload = plaintext
                         log(TAG, DEBUG) { "Meta payload written (${plaintext.size}B plaintext, ${ciphertext.size}B ciphertext)" }
