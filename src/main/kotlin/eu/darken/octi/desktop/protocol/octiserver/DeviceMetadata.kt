@@ -4,10 +4,11 @@ package eu.darken.octi.desktop.protocol.octiserver
  * Identification headers sent on every authenticated REST request and on the WebSocket upgrade.
  * The server records these on auth/touch — without them, peer cards show poor labels/platforms.
  *
- * @property version Desktop build version string, e.g. `"1.0.0-dev"`. Must parse to >= `1.0.0`
- *   so Android peers don't flag this device as outdated or GCM-SIV-incompatible (see
- *   [DeviceMetadataProvider.APP_VERSION] for the gate-by-gate reasoning).
+ * @property version Desktop build version string, e.g. `"0.1.0-dev"`. Independent release train
+ *   from Android — post-octi#308, Android's version gates (outdated / GCM-SIV-incompatible)
+ *   apply only when [platform] equals `"android"`, so the desktop string is free-form.
  * @property platform Wire string identifying the OS family — `"desktop-linux"`, `"desktop-macos"`, `"desktop-windows"`.
+ *   The `desktop-*` prefix is load-bearing: it's what disengages Android's version-comparison gates.
  * @property label Human-readable label, e.g. the hostname or a user-chosen name from Settings.
  */
 data class DeviceMetadata(

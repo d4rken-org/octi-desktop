@@ -34,9 +34,9 @@ object DeviceMetadataProvider {
     // a Gradle-generated buildinfo file for now (the app-main side has a Versions object; we
     // can wire a similar generator when packaging gets wired in Phase H).
     //
-    // Must parse to >= "1.0.0" for Android peers: VersionCompat strips the suffix and uses the
-    // numeric prefix for two gates — MIN_COMPATIBLE_VERSION (0.14.0) for "outdated" badges, and
-    // OctiServerEncryptionCompat.MIN_GCM_SIV_CLIENT_VERSION (1.0.0) for the GCM-SIV-capability
-    // gate. Anything below 1.0.0 makes Android flag this peer as incompatible.
-    const val APP_VERSION = "1.0.0-dev"
+    // Independent release train from Android. Post-octi#308, Android scopes its version gates
+    // (MIN_COMPATIBLE_VERSION, MIN_GCM_SIV_CLIENT_VERSION) to `platform == "android"`, so this
+    // string no longer has to satisfy those Android-specific thresholds — `platformString()`
+    // emits `desktop-*` which disengages the gates for us.
+    const val APP_VERSION = "0.1.0-dev"
 }
