@@ -15,7 +15,11 @@ import kotlin.time.Instant
  */
 object Presence {
 
-    val ONLINE_THRESHOLD: Duration = 5.minutes
+    // Android's default sync cadence (foreground) is ~15 min, so the server's lastSeen on a
+    // peer phone is naturally that stale even when the device is awake and connected. 5 min
+    // was too tight — phones routinely showed offline. 20 min covers the standard interval
+    // with a small grace window for late ticks.
+    val ONLINE_THRESHOLD: Duration = 20.minutes
 
     /** True if [lastSeen] is within [ONLINE_THRESHOLD] of [now]. Null lastSeen → offline. */
     fun isOnline(lastSeen: Instant?, now: Instant = Clock.System.now()): Boolean {
