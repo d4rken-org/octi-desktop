@@ -33,5 +33,10 @@ object DeviceMetadataProvider {
     // Updated by jpackage-driven release tooling; kept as a compile-time constant rather than
     // a Gradle-generated buildinfo file for now (the app-main side has a Versions object; we
     // can wire a similar generator when packaging gets wired in Phase H).
-    const val APP_VERSION = "0.0.1-dev"
+    //
+    // Must parse to >= "1.0.0" for Android peers: VersionCompat strips the suffix and uses the
+    // numeric prefix for two gates — MIN_COMPATIBLE_VERSION (0.14.0) for "outdated" badges, and
+    // OctiServerEncryptionCompat.MIN_GCM_SIV_CLIENT_VERSION (1.0.0) for the GCM-SIV-capability
+    // gate. Anything below 1.0.0 makes Android flag this peer as incompatible.
+    const val APP_VERSION = "1.0.0-dev"
 }
