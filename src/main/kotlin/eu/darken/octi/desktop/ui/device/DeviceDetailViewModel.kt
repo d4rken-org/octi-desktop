@@ -4,12 +4,16 @@ import eu.darken.octi.desktop.common.log.logTag
 import eu.darken.octi.desktop.di.AppGraph
 import eu.darken.octi.desktop.protocol.module.ModuleIds
 import eu.darken.octi.desktop.protocol.modules.power.PowerInfo
+import eu.darken.octi.desktop.protocol.octiserver.ws.EventPayload
 import eu.darken.octi.desktop.protocol.sync.DeviceId
 import eu.darken.octi.desktop.sync.ModuleReader
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 
 @Suppress("unused")
@@ -31,6 +35,18 @@ class DeviceDetailViewModel(
 
     init {
         refresh()
+        // Targeted WS-driven refresh: when a ModuleChanged event arrives for THIS peer's POWER
+        // module, re-fetch. Other module IDs (meta, wifi, …) wake their own sections once those
+        // readers are wired in later phases — we filter here to avoid spurious refetches that
+        // would burn rate-limit budget without changing the visible UI.
+        graph.syncEventBus.events
+            .filter { event ->
+                event is EventPayload.Event.ModuleChanged &&
+                    event.deviceId == targetDeviceId.id &&
+                    event.moduleId == ModuleIds.POWER.id
+            }
+            .onEach { refresh() }
+            .launchIn(graph.appScope)
     }
 
     fun refresh() {

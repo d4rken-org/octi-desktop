@@ -65,7 +65,7 @@ fun DashboardScreen() {
                             strokeWidth = 2.dp,
                         )
                     } else {
-                        IconButton(onClick = { /* TODO D5: trigger immediate refresh */ }) {
+                        IconButton(onClick = { graph.deviceListRepo.kick() }) {
                             Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
                         }
                     }
