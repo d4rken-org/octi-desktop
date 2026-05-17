@@ -54,6 +54,14 @@ class ModuleReader(private val graph: AppGraph) {
             when (val response = client.readModule(moduleId, targetDeviceId)) {
                 OctiServerHttpClient.ModuleReadResult.NotFound -> Result.NotFound
                 is OctiServerHttpClient.ModuleReadResult.Ok -> {
+                    if (response.payload.isEmpty()) {
+                        // The server returns 204 No Content (with an empty body) for modules
+                        // that exist in the device's slot but haven't been written yet — e.g.
+                        // a desktop's own PowerInfo, which the desktop never writes. Treat as
+                        // NotFound rather than feeding an empty buffer to Tink (which would
+                        // fail "decryption failed" and obscure the real state).
+                        return Result.NotFound
+                    }
                     val crypto = PayloadEncryption(keySet = credentials.encryptionKeyset)
                     // Android's OctiServerConnector encrypts each module payload with AAD bound
                     // to `${ownerDeviceId}:${moduleId}` AND gzips before encrypting. Mirror both
