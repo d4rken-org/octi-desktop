@@ -42,6 +42,7 @@ fun main() = application {
     graph.webSocketClient.start()
     graph.metaWriter.start()
     graph.clipboardSync.start()
+    graph.fileShareRepo.start()
 
     Window(
         onCloseRequest = ::exitApplication,

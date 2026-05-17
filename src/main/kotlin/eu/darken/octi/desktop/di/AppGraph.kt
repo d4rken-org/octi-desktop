@@ -8,6 +8,7 @@ import eu.darken.octi.desktop.linking.CredentialsStore
 import eu.darken.octi.desktop.linking.LinkController
 import eu.darken.octi.desktop.linking.LinkResult
 import eu.darken.octi.desktop.modules.clipboard.ClipboardSync
+import eu.darken.octi.desktop.modules.files.FileShareRepo
 import eu.darken.octi.desktop.modules.meta.DeviceMetadataProvider
 import eu.darken.octi.desktop.modules.meta.MetaWriter
 import eu.darken.octi.desktop.protocol.octiserver.OctiServer
@@ -70,6 +71,7 @@ class AppGraph private constructor(
     }
     val metaWriter: MetaWriter by lazy { MetaWriter(this) }
     val clipboardSync: ClipboardSync by lazy { ClipboardSync(this) }
+    val fileShareRepo: FileShareRepo by lazy { FileShareRepo(this) }
 
     init {
         if (initialCredentials != null) {
