@@ -22,6 +22,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpRequestRetry
+import io.ktor.client.plugins.HttpResponseValidator
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.defaultRequest
@@ -87,9 +88,30 @@ class OctiServerHttpClient(
         }
         install(WebSockets)
 
+        // Non-2xx responses must throw rather than reach .body() — content negotiation would
+        // otherwise try to deserialize an empty error body as the expected DTO and surface
+        // NoTransformationFoundException, hiding the real status code from callers. With
+        // expectSuccess on, Ktor raises ClientRequestException/ServerResponseException; we map
+        // those to our OctiServerHttpException via HttpResponseValidator below so upstream code
+        // stays Ktor-agnostic.
+        expectSuccess = true
+        HttpResponseValidator {
+            handleResponseExceptionWithRequest { cause, request ->
+                if (cause is io.ktor.client.plugins.ResponseException) {
+                    throw OctiServerHttpException(
+                        status = cause.response.status,
+                        url = request.url.toString(),
+                    )
+                }
+            }
+        }
+
         defaultRequest {
-            url.takeFrom(address.address)
-            url.appendPathSegments("v1")
+            // Bake /v1 into the base URL — Ktor's defaultRequest URL merge takes the host/port
+            // from default but the path from per-call, so an `appendPathSegments("v1")` here
+            // gets clobbered the moment a call does its own appendPathSegments. Keeping the
+            // prefix on the host URL avoids the gotcha entirely.
+            url.takeFrom("${address.address}/v1/")
             headers {
                 append(DeviceMetadata.HEADER_DEVICE_ID, deviceId.id)
                 append(DeviceMetadata.HEADER_VERSION, deviceMetadata.version)
@@ -168,20 +190,27 @@ class OctiServerHttpClient(
 
     // --- Module read/write/commit ---
 
-    /** GET /v1/module/{moduleId}?device-id={target}. Returns raw decoded body bytes. */
+    /**
+     * GET /v1/module/{moduleId}?device-id={target}. Returns raw decoded body bytes or
+     * [ModuleReadResult.NotFound] for 404 — that's a normal "peer hasn't written this module
+     * yet" path, not an error worth throwing.
+     *
+     * With the client-level `expectSuccess = true`, a 404 normally surfaces as our mapped
+     * [OctiServerHttpException]. Catch that here and branch instead.
+     */
     suspend fun readModule(moduleId: ModuleId, targetDeviceId: DeviceId): ModuleReadResult {
-        val response = client.get {
-            url.appendPathSegments("module", moduleId.id)
-            url.parameters.append("device-id", targetDeviceId.id)
-        }
-        return when (response.status) {
-            HttpStatusCode.OK -> ModuleReadResult.Ok(
+        return try {
+            val response = client.get {
+                url.appendPathSegments("module", moduleId.id)
+                url.parameters.append("device-id", targetDeviceId.id)
+            }
+            ModuleReadResult.Ok(
                 payload = response.bodyAsBytes(),
                 etag = response.headers[HttpHeaders.ETag],
                 modifiedAt = response.headers["X-Modified-At"]?.let { runCatching { Instant.parse(it) }.getOrNull() },
             )
-            HttpStatusCode.NotFound -> ModuleReadResult.NotFound
-            else -> error("Unexpected module read status: ${response.status}")
+        } catch (e: OctiServerHttpException) {
+            if (e.status == HttpStatusCode.NotFound) ModuleReadResult.NotFound else throw e
         }
     }
 
