@@ -139,14 +139,22 @@ class OctiServerHttpClient(
      * use structured cancellation via its scope, instead of nesting inside a Ktor lambda.
      */
     suspend fun openWebSocketSession(): DefaultClientWebSocketSession {
+        // Build the WS URL explicitly from the OctiServer.Address rather than relying on the
+        // defaultRequest URL merge. Observed bug: when the per-call code switched protocol
+        // HTTP → WS via `url.protocol = WS`, Ktor's port for the call fell back to the new
+        // protocol's default (80) instead of preserving the explicit 8080 from defaultRequest.
+        // Setting host/port/protocol/path-segments directly avoids the merge entirely.
+        val wsProtocol = if (address.protocol.equals("https", ignoreCase = true)) {
+            io.ktor.http.URLProtocol.WSS
+        } else {
+            io.ktor.http.URLProtocol.WS
+        }
         return client.webSocketSession {
-            url.appendPathSegments("ws")
-            // Force ws/wss based on the configured protocol; defaultRequest seeds the http
-            // origin but the WebSocket upgrade path needs the explicit ws-protocol switch.
-            url.protocol = when (url.protocol) {
-                io.ktor.http.URLProtocol.HTTPS -> io.ktor.http.URLProtocol.WSS
-                io.ktor.http.URLProtocol.HTTP -> io.ktor.http.URLProtocol.WS
-                else -> url.protocol
+            url {
+                protocol = wsProtocol
+                host = address.domain
+                port = address.port
+                appendPathSegments("ws")
             }
         }
     }
