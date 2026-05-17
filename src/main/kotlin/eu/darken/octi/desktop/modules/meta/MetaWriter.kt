@@ -32,9 +32,9 @@ private val TAG = logTag("Module", "Meta", "Writer")
  * Periodically writes this desktop's [MetaInfo] to `/v1/module/eu.darken.octi.module.core.meta`
  * so peers can see us in the device list with a label, OS, uptime, and version.
  *
- * Fields the Android schema requires that aren't meaningful on desktop (Android version, API
- * level, security patch, deviceType PHONE/TABLET) are emitted as placeholders per the scope
- * decision: don't fork the schema for MVP. Android UI handles UNKNOWN/empty gracefully.
+ * Schema follows app-main PR #306: `deviceType=DESKTOP`, generic `osType`/`osVersionName`, all
+ * Android-only fields left null. Android peers without #306 see the payload as malformed and
+ * skip the meta tile for this device — accepted transitional cost while #306 rolls out.
  *
  * Cadence: write on transition to a fresh active client (cold-start a peer can see us
  * immediately on link), then every [WRITE_INTERVAL]. We skip writes if the data hasn't changed
@@ -98,15 +98,14 @@ class MetaWriter(private val graph: AppGraph) {
         deviceManufacturer = (System.getProperty("java.vendor")?.takeIf { it.isNotBlank() }
             ?: "JVM Desktop"),
         deviceName = hostnameOrUnknown(),
-        // Per scope decision: desktops report UNKNOWN since neither PHONE nor TABLET fits.
-        deviceType = MetaInfo.DeviceType.UNKNOWN,
+        deviceType = MetaInfo.DeviceType.DESKTOP,
         deviceBootedAt = processStartInstant(),
-        // Android-only schema fields. Send empty/placeholder so the wire payload is valid;
-        // Android dashboards render these as "—" or hide them. If MetaInfo v2 with a desktop
-        // discriminator lands later, swap these for proper desktop fields then.
-        androidVersionName = "",
-        androidApiLevel = 0,
-        androidSecurityPatch = null,
+        // Generic OS fields (PR #306). os.name on the JVM is "Linux"/"Mac OS X"/"Windows 11"
+        // etc.; os.version is the kernel/build version. Together they give Android peers enough
+        // to render a sensible "Linux 6.8" or "macOS 14.4" label.
+        osType = System.getProperty("os.name"),
+        osVersionName = System.getProperty("os.version"),
+        // Android-only fields stay null — non-Android clients have no meaningful value here.
     )
 
     private fun processStartInstant(): Instant {
