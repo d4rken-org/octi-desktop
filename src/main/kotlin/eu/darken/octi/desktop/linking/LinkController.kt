@@ -115,11 +115,14 @@ class LinkController(
         if (encoded.isBlank()) return DecodeOutcome.Fail(LinkResult.InvalidBase64)
         return try {
             DecodeOutcome.Ok(LinkingData.fromEncodedString(Serialization.json, encoded.trim()))
+        } catch (e: SerializationException) {
+            // MUST precede the IllegalArgumentException catch — SerializationException extends
+            // IllegalArgumentException in kotlinx-serialization, so reversing the order would
+            // mis-route every JSON-shape error as InvalidBase64.
+            DecodeOutcome.Fail(LinkResult.InvalidJson(e))
         } catch (e: IllegalArgumentException) {
             // LinkingData.fromEncodedString throws this for "not valid base64".
             DecodeOutcome.Fail(LinkResult.InvalidBase64)
-        } catch (e: SerializationException) {
-            DecodeOutcome.Fail(LinkResult.InvalidJson(e))
         } catch (e: java.io.IOException) {
             // Okio's gzip path throws ProtocolException / IOException for bad gzip frames.
             DecodeOutcome.Fail(LinkResult.InvalidGzip)
