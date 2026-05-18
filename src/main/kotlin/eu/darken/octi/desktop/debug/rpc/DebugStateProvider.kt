@@ -42,6 +42,15 @@ class DebugStateProvider(private val graph: AppGraph) : DebugStateSource {
                     put("label", device.label.toJson())
                     put("platform", device.platform.toJson())
                     put("lastSeen", device.lastSeen?.toString().toJson())
+                    // Preserve the null-vs-empty distinction — null = peer hasn't reported,
+                    // empty array = peer explicitly reports no capabilities. The Capability
+                    // authority semantics depend on this difference.
+                    put(
+                        "capabilities",
+                        device.capabilities?.let { caps ->
+                            buildJsonArray { caps.sorted().forEach { add(JsonPrimitive(it)) } }
+                        } ?: JsonNull,
+                    )
                 })
             }
         })

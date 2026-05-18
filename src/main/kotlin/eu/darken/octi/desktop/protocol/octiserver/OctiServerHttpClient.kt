@@ -137,6 +137,9 @@ class OctiServerHttpClient(
                 append(DeviceMetadata.HEADER_VERSION, deviceMetadata.version)
                 append(DeviceMetadata.HEADER_PLATFORM, deviceMetadata.platform)
                 append(DeviceMetadata.HEADER_LABEL, deviceMetadata.label)
+                deviceMetadata.capabilities?.takeIf { it.isNotBlank() }?.let {
+                    append(DeviceMetadata.HEADER_CAPABILITIES, it)
+                }
                 if (credentials != null) {
                     @OptIn(ExperimentalEncodingApi::class)
                     val basic = Base64.Default.encode(

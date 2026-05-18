@@ -32,6 +32,7 @@ data class DevicesResponse(
         @SerialName("version") val version: String? = null,
         @SerialName("platform") val platform: String? = null,
         @SerialName("label") val label: String? = null,
+        @SerialName("capabilities") val capabilities: Set<String>? = null,
         @Serializable(with = InstantSerializer::class) @SerialName("addedAt") val addedAt: Instant? = null,
         @Serializable(with = InstantSerializer::class) @SerialName("lastSeen") val lastSeen: Instant? = null,
     )
