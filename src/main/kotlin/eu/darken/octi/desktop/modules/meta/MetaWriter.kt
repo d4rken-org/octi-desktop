@@ -56,6 +56,16 @@ class MetaWriter(private val graph: AppGraph) {
      */
     val lastWriteSuccessAt: StateFlow<Instant?> = _lastWriteSuccessAt.asStateFlow()
 
+    private val _lastWrittenInfo = MutableStateFlow<MetaInfo?>(null)
+
+    /**
+     * Snapshot of the [MetaInfo] we most recently *successfully* pushed to the server. Null
+     * until the first write succeeds. Used as the local source for the self-device Meta tile on
+     * the Dashboard — WS suppresses self-events so the server-driven invalidation path would
+     * never refresh our own tile.
+     */
+    val lastWrittenInfo: StateFlow<MetaInfo?> = _lastWrittenInfo.asStateFlow()
+
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     fun start() {
         graph.activeClient
@@ -92,6 +102,7 @@ class MetaWriter(private val graph: AppGraph) {
                         client.writeModule(ModuleIds.META, ciphertext)
                         lastWrittenPayload = plaintext
                         _lastWriteSuccessAt.value = Clock.System.now()
+                        _lastWrittenInfo.value = info
                         log(TAG, DEBUG) { "Meta payload written (${plaintext.size}B plaintext, ${ciphertext.size}B ciphertext)" }
                     }
                 }

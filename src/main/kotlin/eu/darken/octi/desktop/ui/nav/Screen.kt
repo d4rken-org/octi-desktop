@@ -15,9 +15,6 @@ sealed class Screen {
     /** Grid of all known devices. Default landing screen post-link. */
     data object Dashboard : Screen()
 
-    /** Detailed module view for a single device. */
-    data class DeviceDetail(val deviceId: String) : Screen()
-
     /** File sharing view (list, download, upload) scoped to one peer. */
     data class Files(val deviceId: String) : Screen()
 

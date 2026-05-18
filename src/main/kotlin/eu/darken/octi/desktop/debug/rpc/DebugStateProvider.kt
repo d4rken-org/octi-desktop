@@ -71,7 +71,6 @@ class DebugStateProvider(private val graph: AppGraph) : DebugStateSource {
         eu.darken.octi.desktop.ui.nav.Screen.Dashboard -> "dashboard"
         eu.darken.octi.desktop.ui.nav.Screen.Clipboard -> "clipboard"
         eu.darken.octi.desktop.ui.nav.Screen.Settings -> "settings"
-        is eu.darken.octi.desktop.ui.nav.Screen.DeviceDetail -> "device:${this.deviceId}"
         is eu.darken.octi.desktop.ui.nav.Screen.Files -> "files:${this.deviceId}"
     }
 }

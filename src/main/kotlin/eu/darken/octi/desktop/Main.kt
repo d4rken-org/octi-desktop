@@ -24,7 +24,6 @@ import eu.darken.octi.desktop.di.AppGraph
 import eu.darken.octi.desktop.ui.LocalAppGraph
 import eu.darken.octi.desktop.ui.clipboard.ClipboardScreen
 import eu.darken.octi.desktop.ui.dashboard.DashboardScreen
-import eu.darken.octi.desktop.ui.device.DeviceDetailScreen
 import eu.darken.octi.desktop.ui.files.FilesScreen
 import eu.darken.octi.desktop.ui.linking.LinkingScreen
 import eu.darken.octi.desktop.ui.nav.Screen
@@ -56,6 +55,7 @@ fun main(args: Array<String>) {
     graph.metaWriter.start()
     graph.clipboardSync.start()
     graph.fileShareRepo.start()
+    graph.dashboardModuleRepo.start()
 
     val debugServer = parsedArgs.config?.let { config ->
         val server = DebugRpcServer(
@@ -105,7 +105,6 @@ private fun ScreenRouter(screen: Screen) {
     when (screen) {
         Screen.Linking -> LinkingScreen()
         Screen.Dashboard -> DashboardScreen()
-        is Screen.DeviceDetail -> DeviceDetailScreen(deviceId = screen.deviceId)
         Screen.Clipboard -> ClipboardScreen()
         Screen.Settings -> SettingsScreen()
         is Screen.Files -> FilesScreen(deviceId = screen.deviceId)

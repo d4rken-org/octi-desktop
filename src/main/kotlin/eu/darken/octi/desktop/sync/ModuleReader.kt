@@ -10,6 +10,7 @@ import eu.darken.octi.desktop.protocol.module.ModuleId
 import eu.darken.octi.desktop.protocol.octiserver.OctiServerHttpClient
 import eu.darken.octi.desktop.protocol.serialization.Serialization
 import eu.darken.octi.desktop.protocol.sync.DeviceId
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.KSerializer
 import okio.ByteString.Companion.toByteString
 
@@ -74,6 +75,13 @@ class ModuleReader(private val graph: AppGraph) {
                     Result.Ok(value)
                 }
             }
+        } catch (e: CancellationException) {
+            // MUST rethrow before the generic Throwable branch — kotlinx.coroutines uses
+            // CancellationException to tear down job hierarchies. Swallowing it here turns
+            // structured cancellation into a stale Result.Error emission and breaks any caller
+            // that relies on cancel-replace semantics (e.g. activeClient transitions or
+            // refresh-supersedes-prior-fetch).
+            throw e
         } catch (e: Throwable) {
             log(TAG, Logging.Priority.WARN, e) {
                 "Read failed for module=${moduleId.logLabel} peer=${targetDeviceId.logLabel}"

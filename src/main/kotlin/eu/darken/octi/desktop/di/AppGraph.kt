@@ -22,6 +22,7 @@ import eu.darken.octi.desktop.sync.DeviceListRepo
 import eu.darken.octi.desktop.sync.ModuleReader
 import eu.darken.octi.desktop.sync.OctiServerWebSocketClient
 import eu.darken.octi.desktop.sync.SyncEventBus
+import eu.darken.octi.desktop.ui.dashboard.DashboardModuleRepo
 import eu.darken.octi.desktop.ui.nav.Navigator
 import eu.darken.octi.desktop.ui.nav.Screen
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -77,6 +78,7 @@ class AppGraph private constructor(
     val metaWriter: MetaWriter by lazy { MetaWriter(this) }
     val clipboardSync: ClipboardSync by lazy { ClipboardSync(this) }
     val fileShareRepo: FileShareRepo by lazy { FileShareRepo(this) }
+    val dashboardModuleRepo: DashboardModuleRepo by lazy { DashboardModuleRepo(this) }
 
     /**
      * Debug RPC action registry. Always present (no overhead when the server is off — it's just
@@ -124,22 +126,6 @@ class AppGraph private constructor(
         ) {
             deviceListRepo.kick()
             buildJsonObject { put("kicked", JsonPrimitive(true)) }
-        }
-
-        debugActions.registerUiAction(
-            DebugActionRegistry.Metadata(
-                name = "dashboard.openDevice",
-                description = "Navigate to a device's detail screen. 404 if the deviceId isn't in the current list.",
-                params = mapOf("deviceId" to "string — must match an entry in deviceListRepo"),
-                example = """{"deviceId":"abc-123"}""",
-            ),
-        ) { params ->
-            val deviceId = params["deviceId"]?.jsonPrimitive?.content
-                ?: error("missing deviceId")
-            val known = deviceListRepo.devices.value.any { it.id == deviceId }
-            if (!known) error("device_not_found: $deviceId")
-            navigator.navigateTo(Screen.DeviceDetail(deviceId = deviceId))
-            buildJsonObject { put("screen", JsonPrimitive("device:$deviceId")) }
         }
 
         debugActions.registerUiAction(

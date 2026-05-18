@@ -56,6 +56,16 @@ class ClipboardSync(private val graph: AppGraph) {
     private val _currentEntry = MutableStateFlow<ClipboardEntry?>(null)
     val currentEntry: StateFlow<ClipboardEntry?> = _currentEntry.asStateFlow()
 
+    private val _lastPushedInfo = MutableStateFlow<ClipboardInfo?>(null)
+
+    /**
+     * Snapshot of the [ClipboardInfo] we most recently pushed to the server. Drives the
+     * self-device Clipboard tile on the Dashboard — WS suppresses self-events so the server-
+     * driven invalidation path would never refresh our own tile. Null until the user opts into
+     * auto-sync and a clipboard push succeeds.
+     */
+    val lastPushedInfo: StateFlow<ClipboardInfo?> = _lastPushedInfo.asStateFlow()
+
     /** True if the toolkit is reachable on this host (headless servers will see false). */
     private val toolkitAvailable: Boolean by lazy {
         try {
@@ -126,6 +136,7 @@ class ClipboardSync(private val graph: AppGraph) {
         val ciphertext = crypto.encrypt(plaintext.toByteString().toGzip(), aad).toByteArray()
         client.writeModule(ModuleIds.CLIPBOARD, ciphertext)
         lastPushedHash = hash
+        _lastPushedInfo.value = info
         log(TAG, DEBUG) { "Pushed clipboard payload (${bytes.size}B) to server" }
     }
 
