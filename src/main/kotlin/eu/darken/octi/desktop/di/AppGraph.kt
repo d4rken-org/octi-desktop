@@ -4,6 +4,7 @@ import eu.darken.octi.desktop.common.coroutine.AppScope
 import eu.darken.octi.desktop.common.log.Logging
 import eu.darken.octi.desktop.common.log.log
 import eu.darken.octi.desktop.common.log.logTag
+import eu.darken.octi.desktop.debug.rpc.DebugActionRegistry
 import eu.darken.octi.desktop.linking.CredentialsStore
 import eu.darken.octi.desktop.linking.LinkController
 import eu.darken.octi.desktop.linking.LinkResult
@@ -26,6 +27,10 @@ import eu.darken.octi.desktop.ui.nav.Screen
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 private val TAG = logTag("AppGraph")
 
@@ -73,6 +78,13 @@ class AppGraph private constructor(
     val clipboardSync: ClipboardSync by lazy { ClipboardSync(this) }
     val fileShareRepo: FileShareRepo by lazy { FileShareRepo(this) }
 
+    /**
+     * Debug RPC action registry. Always present (no overhead when the server is off — it's just
+     * a map). Populated with graph-level actions in [registerDebugActions], invoked from the
+     * factory after construction so `this` is fully wired.
+     */
+    val debugActions: DebugActionRegistry = DebugActionRegistry()
+
     init {
         if (initialCredentials != null) {
             _activeClient.value = buildClient(initialCredentials)
@@ -95,6 +107,76 @@ class AppGraph private constructor(
         _activeClient.value?.close()
         _activeClient.value = buildClient(credentials)
         navigator.navigateTo(Screen.Dashboard, clearStack = true)
+    }
+
+    /**
+     * Registers the always-available graph-level debug actions. Called once by the factory.
+     *
+     * All UI-mutating actions go through [DebugActionRegistry.registerUiAction] so they hop to
+     * the AWT EDT before touching Compose state or [Navigator]'s [MutableStateFlow].
+     */
+    private fun registerDebugActions() {
+        debugActions.registerUiAction(
+            DebugActionRegistry.Metadata(
+                name = "dashboard.refresh",
+                description = "Force-refresh the device list now (skips the poll interval).",
+            ),
+        ) {
+            deviceListRepo.kick()
+            buildJsonObject { put("kicked", JsonPrimitive(true)) }
+        }
+
+        debugActions.registerUiAction(
+            DebugActionRegistry.Metadata(
+                name = "dashboard.openDevice",
+                description = "Navigate to a device's detail screen. 404 if the deviceId isn't in the current list.",
+                params = mapOf("deviceId" to "string — must match an entry in deviceListRepo"),
+                example = """{"deviceId":"abc-123"}""",
+            ),
+        ) { params ->
+            val deviceId = params["deviceId"]?.jsonPrimitive?.content
+                ?: error("missing deviceId")
+            val known = deviceListRepo.devices.value.any { it.id == deviceId }
+            if (!known) error("device_not_found: $deviceId")
+            navigator.navigateTo(Screen.DeviceDetail(deviceId = deviceId))
+            buildJsonObject { put("screen", JsonPrimitive("device:$deviceId")) }
+        }
+
+        debugActions.registerUiAction(
+            DebugActionRegistry.Metadata(
+                name = "navigation.go",
+                description = "Jump directly to a top-level screen. Routes: linking, dashboard, clipboard, settings.",
+                params = mapOf("route" to "one of: linking|dashboard|clipboard|settings"),
+                example = """{"route":"settings"}""",
+            ),
+        ) { params ->
+            val route = params["route"]?.jsonPrimitive?.content ?: error("missing route")
+            val screen = when (route) {
+                "linking" -> Screen.Linking
+                "dashboard" -> Screen.Dashboard
+                "clipboard" -> Screen.Clipboard
+                "settings" -> Screen.Settings
+                else -> error("unknown route: $route")
+            }
+            navigator.navigateTo(screen)
+            buildJsonObject { put("screen", JsonPrimitive(route)) }
+        }
+
+        debugActions.register(
+            DebugActionRegistry.Metadata(
+                name = "linking.submit",
+                description = "Submit a link code as if pasted into the Linking screen.",
+                params = mapOf("code" to "raw share-code string from the Android app"),
+                example = """{"code":"<base64-share-code>"}""",
+            ),
+        ) { params ->
+            val code = params["code"]?.jsonPrimitive?.content ?: error("missing code")
+            val result = linkController.link(code, deviceId)
+            if (result == LinkResult.Success) onLinked()
+            buildJsonObject {
+                put("result", JsonPrimitive(result::class.simpleName ?: "Unknown"))
+            }
+        }
     }
 
     /** Tear down the active session locally — does NOT call the server's DELETE /v1/devices. */
@@ -143,7 +225,7 @@ class AppGraph private constructor(
             val startScreen = if (storedCredentials != null) Screen.Dashboard else Screen.Linking
             val navigator = Navigator(initial = startScreen)
 
-            return AppGraph(
+            val graph = AppGraph(
                 appScope = appScope,
                 settings = settings,
                 keystore = keystore,
@@ -153,6 +235,8 @@ class AppGraph private constructor(
                 navigator = navigator,
                 initialCredentials = storedCredentials,
             )
+            graph.registerDebugActions()
+            return graph
         }
     }
 }

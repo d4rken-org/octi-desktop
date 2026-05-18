@@ -14,8 +14,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import eu.darken.octi.desktop.common.log.Logging.Priority.ERROR
 import eu.darken.octi.desktop.common.log.log
 import eu.darken.octi.desktop.common.log.logTag
+import eu.darken.octi.desktop.debug.rpc.DebugRpcConfig
+import eu.darken.octi.desktop.debug.rpc.DebugRpcServer
+import eu.darken.octi.desktop.debug.rpc.DebugStateProvider
 import eu.darken.octi.desktop.di.AppGraph
 import eu.darken.octi.desktop.ui.LocalAppGraph
 import eu.darken.octi.desktop.ui.clipboard.ClipboardScreen
@@ -26,10 +30,18 @@ import eu.darken.octi.desktop.ui.linking.LinkingScreen
 import eu.darken.octi.desktop.ui.nav.Screen
 import eu.darken.octi.desktop.ui.settings.SettingsScreen
 import eu.darken.octi.desktop.ui.theme.OctiTheme
+import kotlin.system.exitProcess
 
 private val TAG = logTag("Main")
 
-fun main() = application {
+fun main(args: Array<String>) {
+    val parsedArgs = try {
+        DebugRpcConfig.parse(args)
+    } catch (e: IllegalArgumentException) {
+        System.err.println("Invalid CLI argument: ${e.message}")
+        exitProcess(2)
+    }
+
     val graph = AppGraph.create(
         passphrasePrompt = {
             // TODO Phase A3 follow-up: real passphrase dialog. For MVP boot on hosts with a
@@ -45,13 +57,33 @@ fun main() = application {
     graph.clipboardSync.start()
     graph.fileShareRepo.start()
 
-    Window(
-        onCloseRequest = ::exitApplication,
-        title = "Octi",
-        state = rememberWindowState(width = 1024.dp, height = 720.dp),
-    ) {
-        CompositionLocalProvider(LocalAppGraph provides graph) {
-            OctiDesktopApp()
+    val debugServer = parsedArgs.config?.let { config ->
+        val server = DebugRpcServer(
+            config = config,
+            stateProvider = DebugStateProvider(graph),
+            registry = graph.debugActions,
+        )
+        try {
+            server.start()
+        } catch (e: Throwable) {
+            log(TAG, ERROR, e) { "Failed to start debug RPC server; aborting" }
+            exitProcess(2)
+        }
+        server
+    }
+
+    application {
+        Window(
+            onCloseRequest = {
+                debugServer?.stop()
+                exitApplication()
+            },
+            title = "Octi",
+            state = rememberWindowState(width = 1024.dp, height = 720.dp),
+        ) {
+            CompositionLocalProvider(LocalAppGraph provides graph) {
+                OctiDesktopApp()
+            }
         }
     }
 }

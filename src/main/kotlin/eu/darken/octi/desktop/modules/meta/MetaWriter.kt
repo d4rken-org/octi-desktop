@@ -13,6 +13,9 @@ import eu.darken.octi.desktop.protocol.serialization.Serialization
 import eu.darken.octi.desktop.protocol.sync.DeviceId
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
@@ -43,6 +46,15 @@ private val TAG = logTag("Module", "Meta", "Writer")
 class MetaWriter(private val graph: AppGraph) {
 
     private var lastWrittenPayload: ByteArray? = null
+
+    private val _lastWriteSuccessAt = MutableStateFlow<Instant?>(null)
+
+    /**
+     * Timestamp of the most recent successful `PUT` of our meta document. Null until the first
+     * write succeeds. Consumed by the debug RPC `/dev/state` endpoint so a developer can tell
+     * at a glance whether the desktop is actively reaching the server.
+     */
+    val lastWriteSuccessAt: StateFlow<Instant?> = _lastWriteSuccessAt.asStateFlow()
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     fun start() {
@@ -79,6 +91,7 @@ class MetaWriter(private val graph: AppGraph) {
                         val ciphertext = crypto.encrypt(gzipped, aad).toByteArray()
                         client.writeModule(ModuleIds.META, ciphertext)
                         lastWrittenPayload = plaintext
+                        _lastWriteSuccessAt.value = Clock.System.now()
                         log(TAG, DEBUG) { "Meta payload written (${plaintext.size}B plaintext, ${ciphertext.size}B ciphertext)" }
                     }
                 }
