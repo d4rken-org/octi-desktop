@@ -228,6 +228,7 @@ private fun AboutSection() {
                 LinkRow("This app", "https://github.com/d4rken-org/octi-desktop", uriHandler)
                 LinkRow("Octi (Android)", "https://github.com/d4rken-org/octi", uriHandler)
                 LinkRow("Octi Server", "https://github.com/d4rken-org/octi-server", uriHandler)
+                LinkRow("Octi Web", "https://github.com/d4rken-org/octi-web", uriHandler)
                 LinkRow("Discord", "https://discord.gg/s7V4C6zuVy", uriHandler)
             }
 

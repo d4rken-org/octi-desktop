@@ -203,6 +203,16 @@ compose.desktop {
             macOS {
                 bundleID = "eu.darken.octi.desktop"
                 iconFile.set(iconDir.resolve("Octi.icns"))
+                // jpackage's DMG packaging rejects MAJOR=0 ("MAJOR must be > 0"). For 0.x.y
+                // releases, the DMG's internal metadata uses a 1.x.y placeholder. The app
+                // itself still reports BuildConfig.VERSION (the real gradle.properties value)
+                // in --version, the window title, and to the server. Affects only what macOS
+                // shows in "Get Info" on the installer — users see the correct version
+                // everywhere else.
+                if (numericVersion.startsWith("0.")) {
+                    val parts = numericVersion.split(".")
+                    dmgPackageVersion = "1.${parts[1]}.${parts[2]}"
+                }
             }
 
             windows {
