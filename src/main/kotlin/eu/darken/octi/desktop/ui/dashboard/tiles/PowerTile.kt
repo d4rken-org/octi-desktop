@@ -20,8 +20,13 @@ import eu.darken.octi.desktop.ui.dashboard.ModuleSpec
 import eu.darken.octi.desktop.ui.dashboard.ModuleState
 
 @Composable
-fun PowerTile(state: ModuleState<PowerInfo>, onClick: () -> Unit) {
-    ModuleTileShell(spec = ModuleSpec.Power, state = state, onClick = onClick) { power ->
+fun PowerTile(
+    state: ModuleState<PowerInfo>,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    isHero: Boolean = false,
+) {
+    ModuleTileShell(spec = ModuleSpec.Power, state = state, onClick = onClick, modifier = modifier, isHero = isHero) { power ->
         val percent = power.battery.percent.coerceIn(0f, 1f)
         Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {

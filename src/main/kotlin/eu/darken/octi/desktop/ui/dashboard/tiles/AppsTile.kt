@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import eu.darken.octi.desktop.protocol.modules.apps.AppsInfo
@@ -12,8 +13,13 @@ import eu.darken.octi.desktop.ui.dashboard.ModuleSpec
 import eu.darken.octi.desktop.ui.dashboard.ModuleState
 
 @Composable
-fun AppsTile(state: ModuleState<AppsInfo>, onClick: () -> Unit) {
-    ModuleTileShell(spec = ModuleSpec.Apps, state = state, onClick = onClick) { info ->
+fun AppsTile(
+    state: ModuleState<AppsInfo>,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    isHero: Boolean = false,
+) {
+    ModuleTileShell(spec = ModuleSpec.Apps, state = state, onClick = onClick, modifier = modifier, isHero = isHero) { info ->
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             val count = info.installedPackages.size
             Text(

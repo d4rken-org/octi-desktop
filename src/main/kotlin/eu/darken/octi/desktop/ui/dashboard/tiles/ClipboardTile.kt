@@ -30,8 +30,13 @@ import eu.darken.octi.desktop.ui.dashboard.ModuleState
  * the user's explicit click, so this doesn't change the "no auto-reveal" privacy stance.
  */
 @Composable
-fun ClipboardTile(state: ModuleState<ClipboardInfo>, onClick: () -> Unit) {
-    ModuleTileShell(spec = ModuleSpec.Clipboard, state = state, onClick = onClick) { info ->
+fun ClipboardTile(
+    state: ModuleState<ClipboardInfo>,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    isHero: Boolean = false,
+) {
+    ModuleTileShell(spec = ModuleSpec.Clipboard, state = state, onClick = onClick, modifier = modifier, isHero = isHero) { info ->
         val clipboard = LocalClipboardManager.current
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(

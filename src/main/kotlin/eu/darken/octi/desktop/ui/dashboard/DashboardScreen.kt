@@ -8,12 +8,10 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
@@ -22,6 +20,7 @@ import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.DeviceUnknown
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -29,6 +28,8 @@ import androidx.compose.material.icons.filled.Tablet
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -39,6 +40,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,19 +50,22 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import eu.darken.octi.desktop.common.log.log
+import eu.darken.octi.desktop.common.log.logTag
 import eu.darken.octi.desktop.protocol.octiserver.dto.DevicesResponse
 import eu.darken.octi.desktop.protocol.sync.DeviceId
+import eu.darken.octi.desktop.storage.SettingsData
 import eu.darken.octi.desktop.sync.DeviceListRepo
 import eu.darken.octi.desktop.ui.LocalAppGraph
 import eu.darken.octi.desktop.ui.dashboard.details.ModuleDetailSheet
-import eu.darken.octi.desktop.ui.dashboard.tiles.AppsTile
-import eu.darken.octi.desktop.ui.dashboard.tiles.ClipboardTile
-import eu.darken.octi.desktop.ui.dashboard.tiles.ConnectivityTile
-import eu.darken.octi.desktop.ui.dashboard.tiles.FilesTile
-import eu.darken.octi.desktop.ui.dashboard.tiles.MetaTile
-import eu.darken.octi.desktop.ui.dashboard.tiles.PowerTile
-import eu.darken.octi.desktop.ui.dashboard.tiles.WifiTile
+import eu.darken.octi.desktop.ui.dashboard.editor.TileEditorCard
+import eu.darken.octi.desktop.ui.dashboard.editor.TileEditorState
+import eu.darken.octi.desktop.ui.dashboard.layout.TileLayoutConfig
+import eu.darken.octi.desktop.ui.dashboard.layout.normalize
+import eu.darken.octi.desktop.ui.dashboard.layout.toRows
 import eu.darken.octi.desktop.ui.nav.Screen
+
+private val TAG = logTag("UI", "Dashboard")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -68,10 +73,39 @@ fun DashboardScreen() {
     val graph = LocalAppGraph.current
     val devices by graph.deviceListRepo.devices.collectAsState()
     val loadState by graph.deviceListRepo.loadState.collectAsState()
+    val settings by graph.settings.flow.collectAsState()
 
     // Tracks which tile sheet is open across the whole dashboard. Single source so opening one
     // tile closes any other one — matches Android's modal-stack behavior.
     var openSheet by remember { mutableStateOf<Pair<String, ModuleSpec<*>>?>(null) }
+
+    // Which device card is currently in edit mode, if any. Held at screen scope so scrolling
+    // the outer LazyVerticalGrid doesn't lose in-flight edits if the edited item disposes.
+    var editingDeviceId by remember { mutableStateOf<String?>(null) }
+    // Keyed ONLY on editingDeviceId — settings writes during an active edit must NOT recreate
+    // the editor, or they'd silently wipe unsaved drag work. The initial snapshot is captured
+    // when editingDeviceId transitions from null → id; subsequent settings changes are ignored.
+    val editor: TileEditorState? = remember(editingDeviceId) {
+        editingDeviceId?.let { id ->
+            TileEditorState(settings.effectiveLayoutFor(id).normalize(ModuleSpec.allModuleIds))
+        }
+    }
+
+    // Prune stale per-device layout entries — but only after the first successful load so we
+    // don't wipe everything during the empty `Initial` / `Loading` window. Read the stale set
+    // from the collected `settings` snapshot (not graph.settings.data, which would race a
+    // second read-lock acquisition).
+    LaunchedEffect(devices, loadState) {
+        if (loadState !is DeviceListRepo.LoadState.Ok) return@LaunchedEffect
+        val liveIds = devices.map { it.id }.toSet()
+        val stale = settings.tileLayouts.keys - liveIds
+        if (stale.isNotEmpty()) {
+            log(TAG) { "Pruning ${stale.size} stale tile-layout entries: $stale" }
+            graph.settings.update { data ->
+                data.copy(tileLayouts = data.tileLayouts.filterKeys { it in liveIds })
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -110,10 +144,42 @@ fun DashboardScreen() {
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     items(items = devices, key = { it.id }) { device ->
-                        DeviceCard(
+                        DeviceCardOrEditor(
                             device = device,
                             isSelf = device.id == graph.deviceId.id,
+                            editingDeviceId = editingDeviceId,
+                            editor = editor,
+                            settings = settings,
                             onTileClick = { spec -> openSheet = device.id to spec },
+                            onStartEdit = {
+                                log(TAG) { "Edit started for device=${device.id.take(8)}" }
+                                editingDeviceId = device.id
+                            },
+                            onCancelEdit = {
+                                log(TAG) { "Edit cancelled for device=${device.id.take(8)}" }
+                                editingDeviceId = null
+                            },
+                            onSave = { state ->
+                                val cfg = state.toConfig().normalize(ModuleSpec.allModuleIds)
+                                log(TAG) { "Saving tile layout for device=${device.id.take(8)}: $cfg" }
+                                graph.settings.update { it.copy(tileLayouts = it.tileLayouts + (device.id to cfg)) }
+                                editingDeviceId = null
+                            },
+                            onReset = {
+                                log(TAG) { "Resetting tile layout for device=${device.id.take(8)}" }
+                                graph.settings.update { it.copy(tileLayouts = it.tileLayouts - device.id) }
+                                editingDeviceId = null
+                            },
+                            onSaveAsDefault = { state ->
+                                val cfg = state.toConfig().normalize(ModuleSpec.allModuleIds)
+                                log(TAG) { "Saving tile layout as default (and clearing all per-device overrides): $cfg" }
+                                // Single atomic update: set the default and wipe all per-device overrides
+                                // so every existing device snaps to the new default — matches Android.
+                                graph.settings.update {
+                                    it.copy(defaultTileLayout = cfg, tileLayouts = emptyMap())
+                                }
+                                editingDeviceId = null
+                            },
                         )
                     }
                 }
@@ -126,6 +192,41 @@ fun DashboardScreen() {
             deviceId = deviceId,
             spec = spec,
             onDismiss = { openSheet = null },
+        )
+    }
+}
+
+@Composable
+private fun DeviceCardOrEditor(
+    device: DevicesResponse.Device,
+    isSelf: Boolean,
+    editingDeviceId: String?,
+    editor: TileEditorState?,
+    settings: SettingsData,
+    onTileClick: (ModuleSpec<*>) -> Unit,
+    onStartEdit: () -> Unit,
+    onCancelEdit: () -> Unit,
+    onSave: (TileEditorState) -> Unit,
+    onReset: () -> Unit,
+    onSaveAsDefault: (TileEditorState) -> Unit,
+) {
+    if (device.id == editingDeviceId && editor != null) {
+        TileEditorCard(
+            editor = editor,
+            deviceLabel = device.label ?: device.id.take(8),
+            deviceId = remember(device.id) { DeviceId(device.id) },
+            onSave = { onSave(editor) },
+            onCancel = onCancelEdit,
+            onReset = onReset,
+            onSaveAsDefault = { onSaveAsDefault(editor) },
+        )
+    } else {
+        DashboardDeviceCard(
+            device = device,
+            isSelf = isSelf,
+            settings = settings,
+            onTileClick = onTileClick,
+            onStartEdit = onStartEdit,
         )
     }
 }
@@ -148,34 +249,51 @@ private fun EmptyState(loadState: DeviceListRepo.LoadState) {
 }
 
 @Composable
-private fun DeviceCard(
+private fun DashboardDeviceCard(
     device: DevicesResponse.Device,
     isSelf: Boolean,
+    settings: SettingsData,
     onTileClick: (ModuleSpec<*>) -> Unit,
+    onStartEdit: () -> Unit,
 ) {
     val online = Presence.isOnline(device.lastSeen)
+    val deviceId = remember(device.id) { DeviceId(device.id) }
+    val layout = remember(settings, device.id) {
+        settings.effectiveLayoutFor(device.id).normalize(ModuleSpec.allModuleIds)
+    }
+    val rows = remember(layout) { layout.toRows(ModuleSpec.allModuleIds) }
+
     Card(
         modifier = Modifier.fillMaxWidth().heightIn(min = 240.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
     ) {
         Column(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            DeviceHeader(device = device, isSelf = isSelf, online = online)
+            DeviceHeader(device = device, isSelf = isSelf, online = online, onStartEdit = onStartEdit)
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            TileGrid(device = device, onTileClick = onTileClick)
+            ModuleTileGrid(rows = rows, deviceId = deviceId, onTileClick = onTileClick)
         }
     }
 }
 
 @Composable
-private fun DeviceHeader(device: DevicesResponse.Device, isSelf: Boolean, online: Boolean) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+private fun DeviceHeader(
+    device: DevicesResponse.Device,
+    isSelf: Boolean,
+    online: Boolean,
+    onStartEdit: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
         Icon(
             imageVector = iconFor(device.platform),
             contentDescription = null,
             modifier = Modifier.size(24.dp),
             tint = MaterialTheme.colorScheme.primary,
         )
-        Column(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = device.label ?: device.id.take(8),
                 style = MaterialTheme.typography.titleMedium,
@@ -194,108 +312,25 @@ private fun DeviceHeader(device: DevicesResponse.Device, isSelf: Boolean, online
                 )
             }
         }
-    }
-}
-
-/**
- * Inner module-tile layout. Manually composed as rows (NOT `LazyVerticalGrid`) because we live
- * inside the outer dashboard's `LazyVerticalGrid` — nesting two infinite-height vertical scrolls
- * crashes Compose. Manual `Row` composition is fine: the cell count is fixed (7 tiles, deterministic
- * layout) so we don't need lazy materialisation.
- *
- * Layout matches Android: 3 columns, Power wide (spans 2), rest single-cell.
- *
- *     [ Power Power ] [ WiFi      ]
- *     [ Connect    ] [ Clipboard ] [ Files ]
- *     [ Apps       ] [ Meta      ] [       ]
- */
-@Composable
-private fun TileGrid(
-    device: DevicesResponse.Device,
-    onTileClick: (ModuleSpec<*>) -> Unit,
-) {
-    val graph = LocalAppGraph.current
-    val deviceId = remember(device.id) { DeviceId(device.id) }
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Box(modifier = Modifier.weight(2f)) {
-                TileForSpec(ModuleSpec.Power, deviceId, graph) { onTileClick(ModuleSpec.Power) }
-            }
-            Box(modifier = Modifier.weight(1f)) {
-                TileForSpec(ModuleSpec.Wifi, deviceId, graph) { onTileClick(ModuleSpec.Wifi) }
-            }
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Box(modifier = Modifier.weight(1f)) {
-                TileForSpec(ModuleSpec.Connectivity, deviceId, graph) { onTileClick(ModuleSpec.Connectivity) }
-            }
-            Box(modifier = Modifier.weight(1f)) {
-                TileForSpec(ModuleSpec.Clipboard, deviceId, graph) { onTileClick(ModuleSpec.Clipboard) }
-            }
-            Box(modifier = Modifier.weight(1f)) {
-                TileForSpec(ModuleSpec.Files, deviceId, graph) { onTileClick(ModuleSpec.Files) }
-            }
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Box(modifier = Modifier.weight(1f)) {
-                TileForSpec(ModuleSpec.Apps, deviceId, graph) { onTileClick(ModuleSpec.Apps) }
-            }
-            Box(modifier = Modifier.weight(1f)) {
-                TileForSpec(ModuleSpec.Meta, deviceId, graph) { onTileClick(ModuleSpec.Meta) }
-            }
-            // Empty cell to keep the third column gap consistent.
-            Box(modifier = Modifier.weight(1f))
-        }
+        OverflowMenu(onEditTiles = onStartEdit)
     }
 }
 
 @Composable
-private fun TileForSpec(
-    spec: ModuleSpec<*>,
-    deviceId: DeviceId,
-    graph: eu.darken.octi.desktop.di.AppGraph,
-    onClick: () -> Unit,
-) {
-    when (spec) {
-        ModuleSpec.Power -> {
-            val state by graph.dashboardModuleRepo.flowFor(deviceId, ModuleSpec.Power).collectAsState()
-            PowerTile(state = state, onClick = onClick)
+private fun OverflowMenu(onEditTiles: () -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { expanded = true }) {
+            Icon(Icons.Filled.MoreVert, contentDescription = "Card menu")
         }
-        ModuleSpec.Wifi -> {
-            val state by graph.dashboardModuleRepo.flowFor(deviceId, ModuleSpec.Wifi).collectAsState()
-            WifiTile(state = state, onClick = onClick)
-        }
-        ModuleSpec.Connectivity -> {
-            val state by graph.dashboardModuleRepo.flowFor(deviceId, ModuleSpec.Connectivity).collectAsState()
-            ConnectivityTile(state = state, onClick = onClick)
-        }
-        ModuleSpec.Clipboard -> {
-            val state by graph.dashboardModuleRepo.flowFor(deviceId, ModuleSpec.Clipboard).collectAsState()
-            ClipboardTile(state = state, onClick = onClick)
-        }
-        ModuleSpec.Files -> {
-            val state by graph.dashboardModuleRepo.flowFor(deviceId, ModuleSpec.Files).collectAsState()
-            FilesTile(state = state, onClick = onClick)
-        }
-        ModuleSpec.Apps -> {
-            val state by graph.dashboardModuleRepo.flowFor(deviceId, ModuleSpec.Apps).collectAsState()
-            AppsTile(state = state, onClick = onClick)
-        }
-        ModuleSpec.Meta -> {
-            val state by graph.dashboardModuleRepo.flowFor(deviceId, ModuleSpec.Meta).collectAsState()
-            MetaTile(state = state, onClick = onClick)
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("Edit tiles") },
+                onClick = {
+                    expanded = false
+                    onEditTiles()
+                },
+            )
         }
     }
 }
@@ -322,3 +357,10 @@ private fun iconFor(platform: String?): ImageVector {
         else -> Icons.Filled.DeviceUnknown
     }
 }
+
+/**
+ * Looks up the effective tile layout for [deviceId] — the per-device override if present,
+ * otherwise the global default. Mirrors Android `DashboardConfig.effectiveLayout`.
+ */
+private fun SettingsData.effectiveLayoutFor(deviceId: String): TileLayoutConfig =
+    tileLayouts[deviceId] ?: defaultTileLayout

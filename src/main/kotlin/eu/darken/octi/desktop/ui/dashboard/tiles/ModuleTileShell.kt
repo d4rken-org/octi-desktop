@@ -32,24 +32,33 @@ import eu.darken.octi.desktop.ui.dashboard.NotFoundPolicy
  * the Card, the header row (icon + name), and the Loading / NotFound / Error states so module
  * tiles only need to render the happy path.
  *
- * Tile dimensions: minimum height ~96dp. Width is whatever the LazyVerticalGrid cell allocates
- * (3-column inner grid → ~110dp at the 360dp outer-grid minSize); Power's tile spans 2 columns
- * via [ModuleSpec.gridSpan] so it gets ~230dp.
+ * Tile dimensions: minimum height ~96dp. Width is delegated to the caller via [modifier] — the
+ * layout engine sets `weight(1f).fillMaxHeight()` for 2-tile rows and `fillMaxWidth()` for wide
+ * rows.
+ *
+ * [isHero] = true tints the card with [androidx.compose.material3.ColorScheme.primaryContainer]
+ * at 25% alpha to match Android's hero treatment for the top wide row. Non-top wide rows are
+ * NOT hero — they render with the default container color.
  */
 @Composable
 fun <T : Any> ModuleTileShell(
     spec: ModuleSpec<T>,
     state: ModuleState<T>,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    isHero: Boolean = false,
     content: @Composable (T) -> Unit,
 ) {
+    val containerColor = if (isHero) {
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f)
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant
+    }
     Card(
-        modifier = Modifier.fillMaxWidth().heightIn(min = 96.dp),
+        modifier = modifier.fillMaxWidth().heightIn(min = 96.dp),
         onClick = onClick,
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-        ),
+        colors = CardDefaults.cardColors(containerColor = containerColor),
     ) {
         Column(modifier = Modifier.padding(10.dp).fillMaxWidth()) {
             TileHeader(name = spec.displayName, icon = spec.icon)

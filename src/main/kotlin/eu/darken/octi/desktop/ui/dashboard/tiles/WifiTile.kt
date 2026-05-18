@@ -13,8 +13,13 @@ import eu.darken.octi.desktop.ui.dashboard.ModuleSpec
 import eu.darken.octi.desktop.ui.dashboard.ModuleState
 
 @Composable
-fun WifiTile(state: ModuleState<WifiInfo>, onClick: () -> Unit) {
-    ModuleTileShell(spec = ModuleSpec.Wifi, state = state, onClick = onClick) { wifi ->
+fun WifiTile(
+    state: ModuleState<WifiInfo>,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    isHero: Boolean = false,
+) {
+    ModuleTileShell(spec = ModuleSpec.Wifi, state = state, onClick = onClick, modifier = modifier, isHero = isHero) { wifi ->
         val current = wifi.currentWifi
         if (current == null) {
             Text(

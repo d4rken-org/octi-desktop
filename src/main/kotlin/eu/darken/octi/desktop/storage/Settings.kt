@@ -4,6 +4,7 @@ import eu.darken.octi.desktop.common.files.AtomicWrites
 import eu.darken.octi.desktop.common.log.log
 import eu.darken.octi.desktop.common.log.logTag
 import eu.darken.octi.desktop.platform.PlatformDetector
+import eu.darken.octi.desktop.ui.dashboard.layout.TileLayoutConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -138,6 +139,18 @@ data class SettingsData(
     val syncIntervalSeconds: Int = 300,
     /** Clipboard auto-sync is opt-in for privacy reasons. See plan for rationale. */
     val clipboardAutoSync: Boolean = false,
+    /**
+     * Layout applied to any device that doesn't have its own entry in [tileLayouts]. Mutating
+     * this via "Save as default" in the editor also wipes [tileLayouts] so all devices snap to
+     * the new shape — matches Android `GeneralSettings.setDefaultTileLayout`.
+     */
+    val defaultTileLayout: TileLayoutConfig = TileLayoutConfig(),
+    /**
+     * Per-device tile-layout overrides keyed by `DeviceId.id`. Empty by default. Pruned in the
+     * dashboard whenever a device leaves the peer list (gated on a successful load so a
+     * transient empty `devices` emission doesn't wipe every saved entry).
+     */
+    val tileLayouts: Map<String, TileLayoutConfig> = emptyMap(),
 )
 
 @Serializable

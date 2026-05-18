@@ -22,8 +22,13 @@ import eu.darken.octi.desktop.ui.dashboard.ModuleSpec
 import eu.darken.octi.desktop.ui.dashboard.ModuleState
 
 @Composable
-fun ConnectivityTile(state: ModuleState<ConnectivityInfo>, onClick: () -> Unit) {
-    ModuleTileShell(spec = ModuleSpec.Connectivity, state = state, onClick = onClick) { info ->
+fun ConnectivityTile(
+    state: ModuleState<ConnectivityInfo>,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    isHero: Boolean = false,
+) {
+    ModuleTileShell(spec = ModuleSpec.Connectivity, state = state, onClick = onClick, modifier = modifier, isHero = isHero) { info ->
         val clipboard = LocalClipboardManager.current
         val typeLabel = when (info.connectionType) {
             ConnectivityInfo.ConnectionType.WIFI -> "WiFi"

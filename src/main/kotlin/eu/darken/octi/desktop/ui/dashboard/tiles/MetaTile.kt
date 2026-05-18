@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import eu.darken.octi.desktop.protocol.modules.meta.MetaInfo
@@ -13,8 +14,13 @@ import eu.darken.octi.desktop.ui.dashboard.ModuleState
 import kotlin.time.Clock
 
 @Composable
-fun MetaTile(state: ModuleState<MetaInfo>, onClick: () -> Unit) {
-    ModuleTileShell(spec = ModuleSpec.Meta, state = state, onClick = onClick) { meta ->
+fun MetaTile(
+    state: ModuleState<MetaInfo>,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    isHero: Boolean = false,
+) {
+    ModuleTileShell(spec = ModuleSpec.Meta, state = state, onClick = onClick, modifier = modifier, isHero = isHero) { meta ->
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             val osLine = listOfNotNull(
                 meta.osType?.takeIf { it.isNotBlank() },

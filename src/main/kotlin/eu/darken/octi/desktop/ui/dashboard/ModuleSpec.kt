@@ -40,11 +40,12 @@ enum class NotFoundPolicy { EMPTY_STATE, NOT_SHARED }
  *   decrypt + decode the wire payload.
  * - [displayName] / [icon]: tile presentation.
  * - [notFoundPolicy]: what to show when the peer hasn't written this module.
- * - [gridSpan]: column span in the per-card tile grid. Power spans 2 (wide), others span 1.
  *
- * **Order** declared via [entries] mirrors Android's `ModuleUiRegistry`: Power, WiFi, Connectivity,
- * Clipboard, Files, Apps, Meta. Drift here and the desktop tile layout will look different from
- * the phone — fix by reordering, not by renaming.
+ * **Default tile order** is the [entries] order — Power, WiFi, Connectivity, Clipboard, Files,
+ * Apps, Meta — mirroring Android's `ModuleUiRegistry`. Per-device tile width and order are
+ * authored by the user via the dashboard editor and persisted as
+ * [eu.darken.octi.desktop.ui.dashboard.layout.TileLayoutConfig] in `SettingsData.tileLayouts`.
+ * Defaults seed from [TileLayoutConfig.DEFAULT_ORDER] / [TileLayoutConfig.DEFAULT_WIDE].
  */
 sealed class ModuleSpec<T : Any>(
     val moduleId: ModuleId,
@@ -52,7 +53,6 @@ sealed class ModuleSpec<T : Any>(
     val icon: ImageVector,
     val serializer: KSerializer<T>,
     val notFoundPolicy: NotFoundPolicy,
-    val gridSpan: Int,
 ) {
 
     data object Power : ModuleSpec<PowerInfo>(
@@ -61,7 +61,6 @@ sealed class ModuleSpec<T : Any>(
         icon = Icons.Filled.BatteryFull,
         serializer = PowerInfo.serializer(),
         notFoundPolicy = NotFoundPolicy.NOT_SHARED,
-        gridSpan = 2,
     )
 
     data object Wifi : ModuleSpec<WifiInfo>(
@@ -70,7 +69,6 @@ sealed class ModuleSpec<T : Any>(
         icon = Icons.Filled.Wifi,
         serializer = WifiInfo.serializer(),
         notFoundPolicy = NotFoundPolicy.NOT_SHARED,
-        gridSpan = 1,
     )
 
     data object Connectivity : ModuleSpec<ConnectivityInfo>(
@@ -79,7 +77,6 @@ sealed class ModuleSpec<T : Any>(
         icon = Icons.Filled.NetworkCheck,
         serializer = ConnectivityInfo.serializer(),
         notFoundPolicy = NotFoundPolicy.NOT_SHARED,
-        gridSpan = 1,
     )
 
     data object Clipboard : ModuleSpec<ClipboardInfo>(
@@ -88,7 +85,6 @@ sealed class ModuleSpec<T : Any>(
         icon = Icons.Filled.ContentPaste,
         serializer = ClipboardInfo.serializer(),
         notFoundPolicy = NotFoundPolicy.EMPTY_STATE,
-        gridSpan = 1,
     )
 
     data object Files : ModuleSpec<FileShareInfo>(
@@ -97,7 +93,6 @@ sealed class ModuleSpec<T : Any>(
         icon = Icons.Filled.Folder,
         serializer = FileShareInfo.serializer(),
         notFoundPolicy = NotFoundPolicy.EMPTY_STATE,
-        gridSpan = 1,
     )
 
     data object Apps : ModuleSpec<AppsInfo>(
@@ -106,7 +101,6 @@ sealed class ModuleSpec<T : Any>(
         icon = Icons.Filled.Apps,
         serializer = AppsInfo.serializer(),
         notFoundPolicy = NotFoundPolicy.NOT_SHARED,
-        gridSpan = 1,
     )
 
     data object Meta : ModuleSpec<MetaInfo>(
@@ -115,13 +109,18 @@ sealed class ModuleSpec<T : Any>(
         icon = Icons.Filled.Info,
         serializer = MetaInfo.serializer(),
         notFoundPolicy = NotFoundPolicy.NOT_SHARED,
-        gridSpan = 1,
     )
 
     companion object {
-        /** Tile order on the dashboard, matching Android. Power first, wide. */
+        /** Canonical tile order — Power first. Drives the default layout, not the rendered one. */
         val entries: List<ModuleSpec<*>> = listOf(Power, Wifi, Connectivity, Clipboard, Files, Apps, Meta)
 
+        /** Set of all known module-id strings — used by `TileLayoutConfig.normalize` to prune unknowns. */
+        val allModuleIds: Set<String> = entries.map { it.moduleId.id }.toSet()
+
         fun byModuleId(moduleId: ModuleId): ModuleSpec<*>? = entries.firstOrNull { it.moduleId == moduleId }
+
+        /** Lookup by raw wire ID string (the form stored in `TileLayoutConfig.order`). */
+        fun byModuleIdString(id: String): ModuleSpec<*>? = entries.firstOrNull { it.moduleId.id == id }
     }
 }
