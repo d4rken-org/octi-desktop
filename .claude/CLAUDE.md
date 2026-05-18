@@ -19,4 +19,5 @@ Desktop companion for [Octi](https://github.com/d4rken-org/octi) — Compose Mul
 - [Code Style](rules/code-style.md) — Kotlin conventions, logging, kotlinx.serialization
 - [Debug RPC](rules/debug-rpc.md) — Loopback HTTP endpoint for orchestrating the running app
 - [Commit Guidelines](rules/commit-guidelines.md) — Commit message format and examples
+- [Releasing](rules/release.md) — Release flow, prereqs (GitHub App + secrets), jpackage quirks, recovery
 - [Device Capabilities](rules/device-capabilities.md) — Per-peer capability tag set: wire contract, what desktop declares, stay-byte-stable rules

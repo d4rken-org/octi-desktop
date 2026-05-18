@@ -1,0 +1,59 @@
+name: Code tests & eval
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  # Cross-OS matrix is intentional — the desktop's crypto stack (Tink with Conscrypt on x86_64,
+  # BouncyCastle fallback on macOS arm64) needs verification on every shipped target. The init
+  # block in CryptoBootstrap runs an RFC 8452 vector check; running tests on macos-14 (ARM)
+  # proves BC's GCM-SIV is byte-compatible with Android Tink's Conscrypt output.
+  build-and-test:
+    name: Build & test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-13, macos-14, windows-2022]
+    env:
+      # Backtick test names contain UTF-8 chars; the JVM needs a UTF-8 locale to write the
+      # .class files. Linux runners default to POSIX (ASCII) in containers; macOS/Windows are
+      # already UTF-8.
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd #v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup project and build environment
+        uses: ./.github/actions/common-setup
+
+      - name: Check code and run tests
+        shell: bash
+        run: ./gradlew check
+
+      - name: Upload Kover coverage report
+        # One coverage upload is enough — coverage doesn't differ across OSes. Pin it to the
+        # Ubuntu runner so PR reviewers know which artifact to look at.
+        if: matrix.os == 'ubuntu-24.04' && always()
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 #v4.4.0
+        with:
+          name: kover-html
+          path: build/reports/kover/html
+          if-no-files-found: warn
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 #v4.4.0
+        with:
+          name: test-results-${{ matrix.os }}
+          path: build/reports/tests/test
+          if-no-files-found: warn
