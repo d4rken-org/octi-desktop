@@ -21,6 +21,7 @@ import eu.darken.octi.desktop.debug.rpc.DebugRpcConfig
 import eu.darken.octi.desktop.debug.rpc.DebugRpcServer
 import eu.darken.octi.desktop.debug.rpc.DebugStateProvider
 import eu.darken.octi.desktop.di.AppGraph
+import eu.darken.octi.desktop.modules.meta.DeviceMetadataProvider
 import eu.darken.octi.desktop.ui.LocalAppGraph
 import eu.darken.octi.desktop.ui.clipboard.ClipboardScreen
 import eu.darken.octi.desktop.ui.dashboard.DashboardScreen
@@ -78,7 +79,7 @@ fun main(args: Array<String>) {
                 debugServer?.stop()
                 exitApplication()
             },
-            title = "Octi",
+            title = "Octi ${DeviceMetadataProvider.APP_VERSION}",
             state = rememberWindowState(width = 1024.dp, height = 720.dp),
         ) {
             CompositionLocalProvider(LocalAppGraph provides graph) {
