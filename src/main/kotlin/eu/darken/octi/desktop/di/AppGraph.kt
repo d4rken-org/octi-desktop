@@ -177,6 +177,16 @@ class AppGraph private constructor(
                 put("result", JsonPrimitive(result::class.simpleName ?: "Unknown"))
             }
         }
+
+        debugActions.registerUiAction(
+            DebugActionRegistry.Metadata(
+                name = "account.unlink",
+                description = "Local unlink: clears credentials and returns to the Linking screen. Does NOT call the server's DELETE /v1/devices.",
+            ),
+        ) {
+            unlink()
+            buildJsonObject { put("unlinked", JsonPrimitive(true)) }
+        }
     }
 
     /** Tear down the active session locally — does NOT call the server's DELETE /v1/devices. */
