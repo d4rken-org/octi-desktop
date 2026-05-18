@@ -35,6 +35,13 @@ import kotlin.system.exitProcess
 private val TAG = logTag("Main")
 
 fun main(args: Array<String>) {
+    // `--version` / `-v`: print the version and exit 0. Used by release CI's per-OS smoke step
+    // to confirm the packaged binary actually launches with its bundled JRE before publishing.
+    if (args.any { it == "--version" || it == "-v" }) {
+        println("Octi ${DeviceMetadataProvider.APP_VERSION}")
+        exitProcess(0)
+    }
+
     val parsedArgs = try {
         DebugRpcConfig.parse(args)
     } catch (e: IllegalArgumentException) {

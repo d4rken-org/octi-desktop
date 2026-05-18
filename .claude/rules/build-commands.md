@@ -6,10 +6,16 @@
 ./gradlew run                  # run from source (Compose Multiplatform application plugin)
 ./gradlew createDistributable  # produces a runnable image under build/compose/binaries/main/app/Octi
 ./gradlew test                 # unit + integration tests
-./gradlew check                # tests + verification
+./gradlew check                # tests + Kover coverage report (HTML at build/reports/kover/html/index.html)
 ```
 
 **Note**: `installDist` is NOT a thing here — that's the sync-server's Ktor plugin. Compose Multiplatform uses `createDistributable`.
+
+## Version source of truth
+
+`gradle.properties` `version=X.Y.Z[-rcN|-betaN]`. Read by both `project.version` and the `generateBuildConfig` task that writes `eu/darken/octi/desktop/BuildConfig.kt` at build time. Bumped exclusively by `release-prepare.yml`. See [release.md](release.md) for the full release flow.
+
+`Octi --version` / `Octi -v` prints the version and exits 0 — used by CI's per-OS smoke step to confirm the packaged binary launches before publishing.
 
 ## Running the built binary
 
@@ -25,16 +31,17 @@ Bundled JRE; self-contained. Add CLI flags after the executable:
 
 See [debug-rpc.md](debug-rpc.md) for the orchestration endpoint.
 
-## Native packaging (Phase H — not wired yet)
+## Native packaging
 
 ```bash
-./gradlew packageDmg           # macOS
-./gradlew packageMsi           # Windows
+./gradlew packageDmg           # macOS .dmg  (macOS host only)
+./gradlew packageMsi           # Windows .msi (Windows host only)
 ./gradlew packageDeb           # Linux .deb
-./gradlew packageAppImage      # Linux AppImage
+./gradlew packageRpm           # Linux .rpm  (needs rpmbuild)
+./gradlew packageAppImage      # Linux app-image directory (CI wraps with appimagetool → .AppImage file)
 ```
 
-These tasks exist in the Gradle Compose plugin but signing/notarization isn't configured yet — they'll produce unsigned artifacts that trigger Gatekeeper/SmartScreen warnings on macOS/Windows.
+Each platform's installer can only be built on a host of that platform — jpackage doesn't cross-compile. The CI matrix in `.github/workflows/release-tag.yml` runs one job per OS. All artifacts are **unsigned** in v1 — Gatekeeper / SmartScreen warnings expected; README documents the workaround.
 
 ## JDK
 

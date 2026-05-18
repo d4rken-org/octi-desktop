@@ -1,5 +1,6 @@
 package eu.darken.octi.desktop.modules.meta
 
+import eu.darken.octi.desktop.BuildConfig
 import eu.darken.octi.desktop.platform.PlatformDetector
 import eu.darken.octi.desktop.protocol.octiserver.DeviceMetadata
 import eu.darken.octi.desktop.protocol.sync.CapabilitiesCodec
@@ -36,13 +37,12 @@ object DeviceMetadataProvider {
         "octi-desktop"
     }
 
-    // Updated by jpackage-driven release tooling; kept as a compile-time constant rather than
-    // a Gradle-generated buildinfo file for now (the app-main side has a Versions object; we
-    // can wire a similar generator when packaging gets wired in Phase H).
+    // Reads from the generated [BuildConfig.VERSION] — single source of truth is
+    // gradle.properties `version=` bumped by release-prepare.yml.
     //
     // Independent release train from Android. Post-octi#308, Android scopes its version gates
     // (MIN_COMPATIBLE_VERSION, MIN_GCM_SIV_CLIENT_VERSION) to `platform == "android"`, so this
     // string no longer has to satisfy those Android-specific thresholds — `platformString()`
     // emits `desktop-*` which disengages the gates for us.
-    const val APP_VERSION = "0.1.0-dev"
+    val APP_VERSION: String = BuildConfig.VERSION
 }
