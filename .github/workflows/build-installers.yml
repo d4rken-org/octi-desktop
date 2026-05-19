@@ -24,6 +24,11 @@ on:
         description: "Filename prefix for renamed user-facing outputs (AppImage, tarball, dmg, msi). E.g. 'Octi-0.1.0' or 'Octi-nightly'."
         required: true
         type: string
+      artifact-retention-days:
+        description: "How long the per-job workflow artifacts live in GitHub storage. 90 is the upload-artifact default; release-nightly.yml passes 7 because the rolling release replaces them anyway."
+        required: false
+        type: number
+        default: 90
 
 jobs:
   # Linux on ubuntu-22.04 — older GLIBC (2.35) gives binaries that run on most still-supported
@@ -162,6 +167,7 @@ jobs:
           name: linux-pkgs
           path: out/*
           if-no-files-found: error
+          retention-days: ${{ inputs.artifact-retention-days }}
 
   build-macos-arm:
     name: Build macOS ARM .dmg
@@ -229,6 +235,7 @@ jobs:
           name: macos-arm
           path: out/*
           if-no-files-found: error
+          retention-days: ${{ inputs.artifact-retention-days }}
 
   build-macos-intel:
     name: Build macOS Intel .dmg
@@ -296,6 +303,7 @@ jobs:
           name: macos-intel
           path: out/*
           if-no-files-found: error
+          retention-days: ${{ inputs.artifact-retention-days }}
 
   build-windows:
     name: Build Windows .msi
@@ -359,3 +367,4 @@ jobs:
           name: windows
           path: out/*
           if-no-files-found: error
+          retention-days: ${{ inputs.artifact-retention-days }}

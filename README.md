@@ -24,6 +24,14 @@ Grab the latest installer for your OS from [GitHub Releases](https://github.com/
 
 Each release also publishes a `checksums.txt` with SHA256 hashes.
 
+### Nightly builds
+
+For testing the latest changes on `main`, grab the [nightly release](https://github.com/d4rken-org/octi-desktop/releases/tag/nightly).
+
+**No stability guarantees** — nightly is updated on every merge to main and may break in interesting ways. It installs as a separate app called **Octi Nightly** that coexists with your stable install (different package identity per OS), so you can keep your stable Octi and try the nightly side-by-side.
+
+Assets follow the same per-OS scheme as stable, prefixed with `Octi-nightly-` / `octi-nightly-`. A fresh `checksums.txt` is published alongside.
+
 ## Install
 
 ### Linux

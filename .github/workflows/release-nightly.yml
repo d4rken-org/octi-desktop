@@ -1,0 +1,246 @@
+name: Rolling nightly build
+
+# Builds installers for every OS target from the current main commit and publishes them to a
+# permanent `nightly` pre-release. Updated on every push to main; can also be dispatched
+# manually if a rebuild from current main is needed without a no-op commit.
+#
+# Nightly installs as a distinct product on the user's machine (different packageName /
+# bundleID / upgradeUuid — see build.gradle.kts' channel switch). Stable + nightly coexist
+# rather than one upgrading over the other.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# No workflow-level concurrency on purpose: workflow-level `cancel-in-progress: true` would
+# also cancel the publish job mid-upload, which is exactly the failure mode we're trying to
+# avoid. Each job below sets its own concurrency group:
+#   release-nightly-build-${repo}    cancellable — newer pushes supersede in-flight builds
+#   release-nightly-publish-${repo}  serialized but never cancelled — publish runs to completion
+# A stale-SHA guard inside publish-nightly aborts cleanly when main has moved past us during
+# the build window, so a publish from an outdated commit can't clobber a fresher one.
+
+jobs:
+  compute-version:
+    name: Compute nightly version
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: release-nightly-build-${{ github.repository }}
+      cancel-in-progress: true
+    outputs:
+      version_override: ${{ steps.derive.outputs.version_override }}
+      short_sha: ${{ steps.derive.outputs.short_sha }}
+    steps:
+      - name: Guard — must run on main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ "$REF" != "refs/heads/main" ]]; then
+            echo "::error::nightly must run on main (got '$REF')"
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd #v6.0.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Derive nightly version
+        id: derive
+        run: |
+          set -euo pipefail
+          base=$(awk -F= '$1=="version"{print $2}' gradle.properties)
+          # Strip any existing prerelease suffix from the gradle.properties base. We want the
+          # X.Y.Z numeric core; -nightly is appended below using the short SHA.
+          base_numeric=$(echo "$base" | sed -E 's/-(rc[0-9]+|beta[0-9]+|dev[0-9]*|nightly\.[0-9A-Za-z]+)$//')
+          short=$(git rev-parse --short=8 HEAD)
+          echo "version_override=${base_numeric}-nightly.${short}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${short}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build installers
+    needs: [compute-version]
+    concurrency:
+      group: release-nightly-build-${{ github.repository }}
+      cancel-in-progress: true
+    uses: ./.github/workflows/build-installers.yml
+    with:
+      channel: nightly
+      version-override: ${{ needs.compute-version.outputs.version_override }}
+      artifact-prefix: Octi-nightly
+      # Workflow artifacts are an intermediate hop to publish-nightly. Once the release is up,
+      # they're redundant with the release assets. 7 days is plenty of debugging window.
+      artifact-retention-days: 7
+
+  publish-nightly:
+    name: Publish nightly release
+    needs: [compute-version, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      # Separate group from build so a fresh build cancelling an older build doesn't take this
+      # job down mid-upload. cancel-in-progress: false → if a publish is already running, new
+      # publishes queue behind it rather than overwriting in-flight asset uploads.
+      group: release-nightly-publish-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - name: Mint App token (needs to push the nightly tag)
+        # GITHUB_TOKEN cannot bypass tag protection rulesets, and persist-credentials: false on
+        # checkout precludes default-token pushes anyway. The d4rken-org-releaser App has the
+        # same bypass-actor scope used by release-prepare.yml.
+        id: app-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 #v3.1.1
+        with:
+          client-id: ${{ secrets.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - name: Resolve bot identity
+        id: bot
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          user_id=$(gh api "/users/${APP_SLUG}%5Bbot%5D" --jq .id)
+          echo "user_name=${APP_SLUG}[bot]" >> "$GITHUB_OUTPUT"
+          echo "user_email=${user_id}+${APP_SLUG}[bot]@users.noreply.github.com" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout main (App-authenticated)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd #v6.0.2
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: true
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Stale-SHA guard
+        # If main moved past us during the build window, abort. A newer workflow run is on the
+        # way and we shouldn't move the `nightly` tag backwards to our older commit.
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          actual=$(git rev-parse HEAD)
+          if [[ "$actual" != "$EXPECTED_SHA" ]]; then
+            echo "::warning::main moved during build window (was $EXPECTED_SHA, now $actual). Aborting publish — a newer run will replace this."
+            exit 1
+          fi
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 #v5.0.0
+        with:
+          path: artifacts
+
+      - name: Flatten + assert + checksums
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find artifacts -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.tar.gz' -o -name '*.dmg' -o -name '*.msi' \) -exec cp {} release/ \;
+          # Assert the full expected set landed — fail loud if any OS build silently produced
+          # nothing. Nightly's fixed asset names make the matrix here easy to enumerate.
+          required=(
+            Octi-nightly-linux-x86_64.AppImage
+            Octi-nightly-linux.tar.gz
+            Octi-nightly-macos-arm64.dmg
+            Octi-nightly-macos-x64.dmg
+            Octi-nightly.msi
+          )
+          # .deb / .rpm names come from jpackage's convention based on packageName=octi-nightly,
+          # so they look like 'octi-nightly_X.Y.Z_amd64.deb' / 'octi-nightly-X.Y.Z.x86_64.rpm'.
+          # Rather than guessing exact filenames, just assert at least one of each is present.
+          for f in "${required[@]}"; do
+            [[ -f "release/$f" ]] || { echo "::error::missing release/$f"; exit 1; }
+          done
+          ls release/*.deb >/dev/null || { echo "::error::no .deb in release/"; exit 1; }
+          ls release/*.rpm >/dev/null || { echo "::error::no .rpm in release/"; exit 1; }
+          cd release
+          sha256sum * > checksums.txt
+          cat checksums.txt
+
+      - name: Compose release body
+        # Written to a file (not $GITHUB_OUTPUT) and passed via `body_path:` to softprops.
+        # File-based avoids any heredoc-delimiter collision risk if a commit message in the
+        # changelog happens to contain an EOF-shaped token.
+        env:
+          VERSION: ${{ needs.compute-version.outputs.version_override }}
+          SHORT_SHA: ${{ needs.compute-version.outputs.short_sha }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          last_tag=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo "(none)")
+          built_at=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          {
+            echo "## Octi Desktop — Rolling nightly build"
+            echo ""
+            echo "**Bleeding edge — stability not guaranteed.** Use the [latest stable release](https://github.com/${REPO}/releases/latest) unless you specifically want this build. Nightly installs as a separate \"Octi Nightly\" app — it does NOT replace your stable install."
+            echo ""
+            echo "- **Version**: \`${VERSION}\`"
+            echo "- **Commit**: [\`${SHORT_SHA}\`](https://github.com/${REPO}/commit/${SHA})"
+            echo "- **Built**: \`${built_at}\`"
+            echo "- **Last stable**: \`${last_tag}\`"
+            echo ""
+            if [[ "$last_tag" != "(none)" ]]; then
+              echo "### Changes since ${last_tag}"
+              echo ""
+              git log -50 "${last_tag}..HEAD" --pretty=format:"- %s ([%h](https://github.com/${REPO}/commit/%H))"
+              echo ""
+            fi
+          } > release-body.md
+
+      - name: Configure git identity for tag push
+        env:
+          GIT_USER_NAME: ${{ steps.bot.outputs.user_name }}
+          GIT_USER_EMAIL: ${{ steps.bot.outputs.user_email }}
+        run: |
+          set -euo pipefail
+          git config user.name "$GIT_USER_NAME"
+          git config user.email "$GIT_USER_EMAIL"
+
+      - name: Move nightly tag to HEAD
+        # softprops/action-gh-release doesn't move existing tags — only creates new ones. Move
+        # the `nightly` tag explicitly here so it always points at the latest published build.
+        run: |
+          set -euo pipefail
+          git tag -f nightly
+          git push origin nightly --force
+
+      - name: Upload installers
+        # First softprops call uploads the installer assets. Body + checksums.txt come in a
+        # separate call below — that shrinks the window where a user could pull a half-updated
+        # set of files (new installers, stale checksums).
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda #v3.0.0
+        with:
+          tag_name: nightly
+          name: "Nightly (${{ needs.compute-version.outputs.version_override }})"
+          prerelease: true
+          make_latest: false
+          files: |
+            release/Octi-nightly-linux-x86_64.AppImage
+            release/Octi-nightly-linux.tar.gz
+            release/Octi-nightly-macos-arm64.dmg
+            release/Octi-nightly-macos-x64.dmg
+            release/Octi-nightly.msi
+            release/octi-nightly_*.deb
+            release/octi-nightly-*.rpm
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+
+      - name: Upload checksums + finalize body
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda #v3.0.0
+        with:
+          tag_name: nightly
+          name: "Nightly (${{ needs.compute-version.outputs.version_override }})"
+          prerelease: true
+          make_latest: false
+          body_path: release-body.md
+          files: release/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
