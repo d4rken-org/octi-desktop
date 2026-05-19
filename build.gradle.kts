@@ -224,15 +224,16 @@ compose.desktop {
             macOS {
                 bundleID = if (isNightly) "eu.darken.octi.desktop.nightly" else "eu.darken.octi.desktop"
                 iconFile.set(iconDir.resolve("Octi.icns"))
-                // jpackage's DMG packaging rejects MAJOR=0 ("MAJOR must be > 0"). For 0.x.y
-                // releases, the DMG's internal metadata uses a 1.x.y placeholder. The app
-                // itself still reports BuildConfig.VERSION (the real gradle.properties value)
-                // in --version, the window title, and to the server. Affects only what macOS
-                // shows in "Get Info" on the installer — users see the correct version
-                // everywhere else.
+                // jpackage on macOS rejects app-version starting with 0 ("The first number in
+                // an app-version cannot be zero or negative") for BOTH createDistributable
+                // (.app bundle) and the DMG packaging task. For 0.x.y releases, override the
+                // macOS-wide packageVersion to a 1.x.y placeholder; this cascades to every
+                // macOS bundler. The app itself still reports BuildConfig.VERSION (the real
+                // gradle.properties value) in --version, the window title, and to the server
+                // — only what macOS shows in "Get Info" / Finder is affected.
                 if (numericVersion.startsWith("0.")) {
                     val parts = numericVersion.split(".")
-                    dmgPackageVersion = "1.${parts[1]}.${parts[2]}"
+                    packageVersion = "1.${parts[1]}.${parts[2]}"
                 }
             }
 

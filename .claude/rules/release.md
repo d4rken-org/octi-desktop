@@ -61,10 +61,16 @@ Nightly avoids this problem entirely by using a different `upgradeUuid` / `packa
 `bundleID` per channel — nightly installs as a distinct "Octi Nightly" product, not as an
 upgrade over stable. See the Nightly section below.
 
-## DMG MAJOR > 0 requirement
+## macOS MAJOR > 0 requirement
 
-Compose Desktop's DMG packaging rejects `0.X.Y` versions ("MAJOR must be > 0"). The desktop
-project starts at `1.0.0` for this reason. Future bumps stay above 1.0.0.
+jpackage on macOS rejects app-version starting with 0 ("The first number in an app-version
+cannot be zero or negative") for both `createDistributable` (the `.app` bundle) and DMG
+packaging. For 0.x.y releases, `build.gradle.kts` overrides `macOS.packageVersion` to a
+1.x.y placeholder; this cascades to every macOS bundler. The app itself still reports
+`BuildConfig.VERSION` (the real gradle.properties value) in `--version`, the window title,
+and to the server — only what macOS shows in "Get Info" / Finder is affected.
+
+Linux + Windows accept 0.x.y as-is.
 
 ## Release-tag.yml is push-only
 
