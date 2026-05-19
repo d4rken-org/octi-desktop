@@ -50,11 +50,13 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y rpm
-          # appimagetool isn't packaged in Ubuntu repos — pull the upstream continuous build
-          # by SHA256-pinned URL. The .AppImage file from Compose Desktop's packageAppImage
-          # task is actually a *directory*; we wrap it with appimagetool here.
-          APPIMAGETOOL_URL="https://github.com/AppImage/AppImageKit/releases/download/13/appimagetool-x86_64.AppImage"
-          APPIMAGETOOL_SHA="df3baf5ca5facbecfc2f3fa6713c29ab9cefa8fd8c1eac5d283b79cab33e4acb"
+          # appimagetool isn't packaged in Ubuntu repos — pull the upstream tagged release by
+          # SHA256-pinned URL. The .AppImage file from Compose Desktop's packageAppImage task
+          # is actually a *directory*; we wrap it with appimagetool here. The legacy
+          # AppImage/AppImageKit@13 URL was removed in 2026; switched to the canonical
+          # AppImage/appimagetool repo which carries the maintained 1.9.x line.
+          APPIMAGETOOL_URL="https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage"
+          APPIMAGETOOL_SHA="ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
           curl -L -o /tmp/appimagetool "$APPIMAGETOOL_URL"
           echo "$APPIMAGETOOL_SHA  /tmp/appimagetool" | sha256sum -c -
           chmod +x /tmp/appimagetool
@@ -88,6 +90,22 @@ jobs:
           # build/compose/binaries/main/app/Octi/. The real .AppImage file is produced by
           # appimagetool below.
           ./gradlew ${args[@]+"${args[@]}"} packageDeb packageRpm packageAppImage createDistributable
+
+      - name: Dump jpackage logs on failure
+        # jpackage's stdout/stderr live in build/compose/logs/<task>/jpackage-*-{out,err}.txt
+        # — when gradle reports "exit code 1" it doesn't echo those into the workflow log.
+        # Dump them here so the failure log shows the actual jpackage error message.
+        if: failure()
+        run: |
+          set +e
+          echo "=== build/compose/logs tree ==="
+          find build/compose/logs -type f 2>/dev/null
+          echo
+          find build/compose/logs -type f -name '*.txt' 2>/dev/null | while read -r f; do
+            echo "--- $f ---"
+            cat "$f"
+            echo
+          done
 
       - name: Smoke test built binary
         run: |
@@ -208,6 +226,19 @@ jobs:
           # (still the system bash on macOS, even though runner PATH usually picks up bash 5.x).
           ./gradlew ${args[@]+"${args[@]}"} packageDmg createDistributable
 
+      - name: Dump jpackage logs on failure
+        if: failure()
+        run: |
+          set +e
+          echo "=== build/compose/logs tree ==="
+          find build/compose/logs -type f 2>/dev/null
+          echo
+          find build/compose/logs -type f -name '*.txt' 2>/dev/null | while read -r f; do
+            echo "--- $f ---"
+            cat "$f"
+            echo
+          done
+
       - name: Smoke test built binary
         run: |
           set -euo pipefail
@@ -276,6 +307,19 @@ jobs:
           # (still the system bash on macOS, even though runner PATH usually picks up bash 5.x).
           ./gradlew ${args[@]+"${args[@]}"} packageDmg createDistributable
 
+      - name: Dump jpackage logs on failure
+        if: failure()
+        run: |
+          set +e
+          echo "=== build/compose/logs tree ==="
+          find build/compose/logs -type f 2>/dev/null
+          echo
+          find build/compose/logs -type f -name '*.txt' 2>/dev/null | while read -r f; do
+            echo "--- $f ---"
+            cat "$f"
+            echo
+          done
+
       - name: Smoke test built binary
         run: |
           set -euo pipefail
@@ -341,6 +385,18 @@ jobs:
           if (-not [string]::IsNullOrEmpty($env:OVERRIDE)) { $gradleArgs += "-Pversion=$($env:OVERRIDE)" }
           if ($env:CHANNEL -ne "stable") { $gradleArgs += "-Pchannel=$($env:CHANNEL)" }
           .\gradlew.bat @gradleArgs packageMsi createDistributable
+
+      - name: Dump jpackage logs on failure
+        if: failure()
+        shell: pwsh
+        run: |
+          $logRoot = 'build\compose\logs'
+          if (-not (Test-Path $logRoot)) { return }
+          Get-ChildItem -Recurse $logRoot -Filter '*.txt' -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Output "--- $($_.FullName) ---"
+            Get-Content $_.FullName -ErrorAction SilentlyContinue
+            Write-Output ""
+          }
 
       - name: Smoke test built binary
         shell: pwsh
