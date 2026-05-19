@@ -50,7 +50,7 @@ jobs:
         # One coverage upload is enough — coverage doesn't differ across OSes. Pin it to the
         # Ubuntu runner so PR reviewers know which artifact to look at.
         if: matrix.os == 'ubuntu-24.04' && always()
-        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 #v4.4.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a #v7.0.1
         with:
           name: kover-html
           path: build/reports/kover/html
@@ -58,7 +58,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 #v4.4.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a #v7.0.1
         with:
           name: test-results-${{ matrix.os }}
           path: build/reports/tests/test

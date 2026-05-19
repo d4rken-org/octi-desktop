@@ -180,7 +180,7 @@ jobs:
           ls -la out/
 
       - name: Upload Linux artifacts
-        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 #v4.4.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a #v7.0.1
         with:
           name: linux-pkgs
           path: out/*
@@ -261,7 +261,7 @@ jobs:
           ls -la out/
 
       - name: Upload macOS ARM artifact
-        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 #v4.4.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a #v7.0.1
         with:
           name: macos-arm
           path: out/*
@@ -342,7 +342,7 @@ jobs:
           ls -la out/
 
       - name: Upload macOS Intel artifact
-        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 #v4.4.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a #v7.0.1
         with:
           name: macos-intel
           path: out/*
@@ -418,7 +418,7 @@ jobs:
           Get-ChildItem out
 
       - name: Upload Windows artifact
-        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 #v4.4.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a #v7.0.1
         with:
           name: windows
           path: out/*
