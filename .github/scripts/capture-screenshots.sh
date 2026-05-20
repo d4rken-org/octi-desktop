@@ -86,6 +86,10 @@ action "navigation.go" '{"route":"linking"}' >/dev/null
 snap "01_linking"
 
 # --- 2. Link the desktop to the phantom peer. ---
+# Set a presentable device label before linking — MetaWriter's first write happens on the
+# link transition, so the dashboard tile reflects this label rather than the runner's
+# hostname ("runnervm…") which leaks into every shot otherwise.
+action "settings.deviceLabel" '{"label":"MacBook Pro"}' >/dev/null
 echo "Step 2: submit share code"
 LINK_CODE=$(cat "$LINK_FILE")
 LINK_PAYLOAD=$(python3 -c 'import json,sys; print(json.dumps({"code": sys.argv[1]}))' "$LINK_CODE")

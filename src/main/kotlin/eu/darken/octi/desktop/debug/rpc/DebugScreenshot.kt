@@ -27,8 +27,15 @@ object DebugScreenshot {
         if (GraphicsEnvironment.isHeadless()) {
             error("Headless JVM — no display to capture")
         }
+        val robot = Robot()
+        // Park the cursor at (0,0) so it doesn't sit over a tile and paint a hover/highlight
+        // state into the screenshot. In the screenshot CI workflow the cursor starts at
+        // the middle of the Xvfb screen and otherwise lands on whatever was last clicked;
+        // pinning it to the screen origin (which is reliably outside our window) gives
+        // deterministic, hover-free captures.
+        robot.mouseMove(0, 0)
         val bounds = activeWindowBounds() ?: Rectangle(Toolkit.getDefaultToolkit().screenSize)
-        val image: BufferedImage = Robot().createScreenCapture(bounds)
+        val image: BufferedImage = robot.createScreenCapture(bounds)
         val baos = ByteArrayOutputStream()
         val wrote = ImageIO.write(image, "png", baos)
         if (!wrote) error("ImageIO had no writer for PNG")
