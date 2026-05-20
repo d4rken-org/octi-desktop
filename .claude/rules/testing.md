@@ -64,6 +64,7 @@ The smoke suite covers:
 - single-device meta module write/read using the real gzip → encrypt wire shape
 - blob session upload → module commit → list → download/decrypt
 - two-device share-code interop for meta + blob reads
+- WebSocket push: linked peer opens `/v1/ws` and receives `ModuleChanged` for the other peer's write
 
 If `SMOKE_SERVER_URL` is unset, tests skip cleanly via JUnit assumptions.
 
