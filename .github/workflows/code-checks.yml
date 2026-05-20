@@ -88,11 +88,20 @@ jobs:
     # failure here may indicate either a desktop regression OR an upstream change — check
     # octi-server main if the failure is unexplained. The tag is republished on every server
     # main push; GH Actions pulls the latest at job start.
+    #
+    # Two service containers are brought up so MultiConnectorWireSmokeTest can exercise the
+    # two-server foundation that the multi-connector feature builds on. Both pull the same
+    # `:canary` tag so cross-server tests run against matching server versions; mismatched
+    # versions would conflate upstream drift with multi-connector regressions.
     services:
       sync-server:
         image: ghcr.io/d4rken-org/octi-server:canary
         ports:
           - 18080:8080
+      sync-server-b:
+        image: ghcr.io/d4rken-org/octi-server:canary
+        ports:
+          - 18081:8080
     steps:
       - name: Checkout source code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd #v6.0.2
@@ -102,29 +111,39 @@ jobs:
       - name: Setup project and build environment
         uses: ./.github/actions/common-setup
 
-      - name: Wait for sync-server
+      - name: Wait for sync-servers
         shell: bash
         run: |
           set -euo pipefail
-          for attempt in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:18080/v1/status > /dev/null; then
-              echo "sync-server up after ${attempt}s"
-              exit 0
+          for url in http://127.0.0.1:18080/v1/status http://127.0.0.1:18081/v1/status; do
+            ready=0
+            for attempt in $(seq 1 30); do
+              if curl -sf "$url" > /dev/null; then
+                echo "$url up after ${attempt}s"
+                ready=1
+                break
+              fi
+              sleep 1
+            done
+            if [ "$ready" -ne 1 ]; then
+              echo "$url did not respond within 30s" >&2
+              docker logs ${{ job.services.sync-server.id }} || true
+              docker logs ${{ job.services.sync-server-b.id }} || true
+              exit 1
             fi
-            sleep 1
           done
-          echo "sync-server did not respond within 30s" >&2
-          docker logs ${{ job.services.sync-server.id }} || true
-          exit 1
 
       - name: Run smoke suite
         env:
           SMOKE_SERVER_URL: http://127.0.0.1:18080
+          SMOKE_SERVER_URL_B: http://127.0.0.1:18081
         run: ./gradlew smokeTest
 
       - name: Dump sync-server logs on failure
         if: failure()
-        run: docker logs ${{ job.services.sync-server.id }} || true
+        run: |
+          docker logs ${{ job.services.sync-server.id }} || true
+          docker logs ${{ job.services.sync-server-b.id }} || true
 
       - name: Upload smoke test results
         if: always()
