@@ -1,7 +1,7 @@
 name: Build installers (reusable)
 
 # Per-OS jpackage build matrix, factored out of release-tag.yml so the same
-# jobs can be reused by other publish flows (e.g. release-nightly.yml).
+# jobs can be reused by other publish flows (e.g. release-canary.yml).
 #
 # Inputs are designed so the stable release path stays byte-identical: passing
 # the defaults (channel=stable, version-override="") produces the same gradle
@@ -11,21 +11,21 @@ on:
   workflow_call:
     inputs:
       channel:
-        description: "Build channel: 'stable' or 'nightly'. Passed to gradle as -Pchannel=… when not 'stable'."
+        description: "Build channel: 'stable' or 'canary'. Passed to gradle as -Pchannel=… when not 'stable'."
         required: false
         type: string
         default: stable
       version-override:
-        description: "Explicit version override (e.g. '0.1.0-nightly.abc12345'). Empty means use gradle.properties as-is."
+        description: "Explicit version override (e.g. '0.1.0-canary.abc12345'). Empty means use gradle.properties as-is."
         required: false
         type: string
         default: ""
       artifact-prefix:
-        description: "Filename prefix for renamed user-facing outputs (AppImage, tarball, dmg, msi). E.g. 'Octi-0.1.0' or 'Octi-nightly'."
+        description: "Filename prefix for renamed user-facing outputs (AppImage, tarball, dmg, msi). E.g. 'Octi-0.1.0' or 'Octi-canary'."
         required: true
         type: string
       artifact-retention-days:
-        description: "How long the per-job workflow artifacts live in GitHub storage. 90 is the upload-artifact default; release-nightly.yml passes 7 because the rolling release replaces them anyway."
+        description: "How long the per-job workflow artifacts live in GitHub storage. 90 is the upload-artifact default; release-canary.yml passes 7 because the rolling release replaces them anyway."
         required: false
         type: number
         default: 90
@@ -111,7 +111,7 @@ jobs:
         run: |
           set -euo pipefail
           # Glob the launcher under bin/ — the binary basename matches the app's packageName
-          # (Octi for stable; channel-aware in nightly).
+          # (Octi for stable; channel-aware in canary).
           launcher=$(find build/compose/binaries/main/app -path '*/bin/Octi*' -type f -print -quit)
           [[ -n "$launcher" ]] || { echo "::error::no launcher found under build/compose/binaries/main/app/*/bin/"; exit 1; }
           "$launcher" --version
@@ -127,7 +127,7 @@ jobs:
         run: |
           set -euo pipefail
           # Compose Desktop's packageAppImage outputs to build/compose/binaries/main/app/<packageName>/.
-          # packageName is channel-aware (Octi vs OctiNightly), and jpackage names bin/<name> and
+          # packageName is channel-aware (Octi vs OctiCanary), and jpackage names bin/<name> and
           # lib/<name>.png after it — glob instead of hardcoding so both channels Just Work.
           APPDIR=/tmp/Octi.AppDir
           rm -rf "$APPDIR"
@@ -138,11 +138,11 @@ jobs:
           launcher_bin=$(find "$APPDIR/bin" -maxdepth 1 -type f -print -quit)
           [[ -n "$launcher_bin" ]] || { echo "::error::no launcher binary found under $APPDIR/bin/"; exit 1; }
           launcher_name=$(basename "$launcher_bin")
-          # Channel-aware identity: distinct desktop/icon ids so stable + nightly coexist in the
+          # Channel-aware identity: distinct desktop/icon ids so stable + canary coexist in the
           # user's desktop icon cache instead of clobbering each other on integration.
-          if [[ "$CHANNEL" == "nightly" ]]; then
-            display_name="Octi Nightly"
-            app_id="octi-nightly"
+          if [[ "$CHANNEL" == "canary" ]]; then
+            display_name="Octi Canary"
+            app_id="octi-canary"
           else
             display_name="Octi"
             app_id="octi"
@@ -184,7 +184,7 @@ jobs:
           set -euo pipefail
           src_dir=$(find build/compose/binaries/main/app -mindepth 1 -maxdepth 1 -type d -print -quit)
           [[ -n "$src_dir" ]] || { echo "::error::no app image directory found under build/compose/binaries/main/app"; exit 1; }
-          # tar -C <parent> <leafname> keeps the inner directory name (Octi or OctiNightly) intact in the archive.
+          # tar -C <parent> <leafname> keeps the inner directory name (Octi or OctiCanary) intact in the archive.
           tar -czf "${PREFIX}-linux.tar.gz" -C "$(dirname "$src_dir")" "$(basename "$src_dir")"
 
       - name: Collect Linux artifacts
@@ -422,7 +422,7 @@ jobs:
       - name: Smoke test built binary
         shell: pwsh
         run: |
-          # Filter matches Octi.exe (stable) or any channel-aware variant in nightly.
+          # Filter matches Octi.exe (stable) or any channel-aware variant in canary.
           $exe = Get-ChildItem -Recurse -Path build\compose\binaries\main\app -Filter 'Octi*.exe' | Select-Object -First 1
           if (-not $exe) { Write-Error "no Octi*.exe found"; exit 1 }
           & $exe.FullName --version

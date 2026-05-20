@@ -11,7 +11,7 @@ plugins {
 
 group = "eu.darken.octi.desktop"
 // `version` is loaded from gradle.properties — single source of truth, bumped by release-prepare.yml.
-// `release-nightly.yml` overrides this at build time via `-Pversion=0.X.Y-nightly.{shortsha8}`.
+// `release-canary.yml` overrides this at build time via `-Pversion=0.X.Y-canary.{shortsha8}`.
 
 // jpackage rejects non-numeric versions like "1.0.0-rc1" — strip the prerelease suffix for the
 // packageVersion fed to MSI/DMG/DEB/RPM/AppImage. The full string still flows to BuildConfig.VERSION
@@ -20,9 +20,9 @@ val rawVersion: String = project.version.toString()
 // Each prerelease label has its own suffix shape:
 //   -rcN / -betaN — purely numeric (existing stable channel)
 //   -devN         — optional digits (legacy local-dev convention)
-//   -nightly.SHA  — dot + alphanumeric short-sha (release-nightly.yml)
+//   -canary.SHA   — dot + alphanumeric short-sha (release-canary.yml)
 val numericVersion: String = rawVersion.replace(
-    Regex("-(rc\\d+|beta\\d+|dev\\d*|nightly\\.[0-9a-zA-Z]+)$"),
+    Regex("-(rc\\d+|beta\\d+|dev\\d*|canary\\.[0-9a-zA-Z]+)$"),
     "",
 )
 
@@ -30,14 +30,16 @@ require(numericVersion.matches(Regex("^\\d+\\.\\d+\\.\\d+$"))) {
     "After stripping prerelease suffix, version must be X.Y.Z numeric — got '$numericVersion' from '$rawVersion'"
 }
 
-// Build channel. `stable` is the default — release-tag.yml builds with this. `nightly` switches
-// per-OS package identity (name / bundleID / upgradeUuid) so a nightly install coexists with a
+// Build channel. `stable` is the default — release-tag.yml builds with this. `canary` switches
+// per-OS package identity (name / bundleID / upgradeUuid) so a canary install coexists with a
 // stable install on the same machine instead of fighting it for the system's "Octi" identity.
+// The label borrows Chrome / Android Studio's "canary" convention for per-merge bleeding-edge
+// builds (rebuilt on every push to main — see release-canary.yml).
 val channel: String = (project.findProperty("channel") as? String) ?: "stable"
-require(channel in setOf("stable", "nightly")) {
-    "channel must be 'stable' or 'nightly', got '$channel'"
+require(channel in setOf("stable", "canary")) {
+    "channel must be 'stable' or 'canary', got '$channel'"
 }
-val isNightly = channel == "nightly"
+val isCanary = channel == "canary"
 
 repositories {
     mavenCentral()
@@ -206,11 +208,11 @@ compose.desktop {
                 }
             }
             targetFormats(*hostFormats)
-            packageName = if (isNightly) "OctiNightly" else "Octi"
+            packageName = if (isCanary) "OctiCanary" else "Octi"
             // jpackage requires numeric X.Y.Z — see `numericVersion` above for suffix-stripping.
             packageVersion = numericVersion
-            description = if (isNightly) {
-                "Octi desktop companion — multi-device sync (nightly build, unstable)"
+            description = if (isCanary) {
+                "Octi desktop companion — multi-device sync (canary build, bleeding edge)"
             } else {
                 "Octi desktop companion — multi-device sync"
             }
@@ -225,9 +227,9 @@ compose.desktop {
             val iconDir = project.file("src/main/resources/icons")
 
             linux {
-                packageName = if (isNightly) "octi-nightly" else "octi"
+                packageName = if (isCanary) "octi-canary" else "octi"
                 debMaintainer = "info@d4rken.eu"
-                menuGroup = if (isNightly) "Network (Nightly)" else "Network"
+                menuGroup = if (isCanary) "Network (Canary)" else "Network"
                 appCategory = "Network"
                 iconFile.set(iconDir.resolve("Octi.png"))
                 // Note: Compose Desktop 1.7's DSL doesn't expose `Depends:` for .deb. Users
@@ -238,7 +240,7 @@ compose.desktop {
             }
 
             macOS {
-                bundleID = if (isNightly) "eu.darken.octi.desktop.nightly" else "eu.darken.octi.desktop"
+                bundleID = if (isCanary) "eu.darken.octi.desktop.canary" else "eu.darken.octi.desktop"
                 iconFile.set(iconDir.resolve("Octi.icns"))
                 // jpackage on macOS rejects app-version starting with 0 ("The first number in
                 // an app-version cannot be zero or negative") for BOTH createDistributable
@@ -254,12 +256,12 @@ compose.desktop {
             }
 
             windows {
-                menuGroup = if (isNightly) "Octi Nightly" else "Octi"
-                // Distinct UUIDs per channel → MSI installer treats nightly and stable as separate
+                menuGroup = if (isCanary) "Octi Canary" else "Octi"
+                // Distinct UUIDs per channel → MSI installer treats canary and stable as separate
                 // products so both can be installed side-by-side instead of one upgrading over the
                 // other. Both values are stable forever — generating new ones at install time would
-                // break upgrades from one nightly to the next.
-                upgradeUuid = if (isNightly) {
+                // break upgrades from one canary to the next.
+                upgradeUuid = if (isCanary) {
                     "76f2400c-9803-494e-b137-7280e8aa3ca5"
                 } else {
                     "9c4b3c1d-2a5d-4f8e-9a3b-7b6c5d4e3f2a"
