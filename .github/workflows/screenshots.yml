@@ -56,7 +56,13 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -y
-          sudo apt-get install -y --no-install-recommends xvfb libsecret-tools imagemagick python3
+          # x11-utils brings in xdpyinfo (Ubuntu's xvfb metapackage doesn't depend on it).
+          # xauth + xfonts-base are required by Xvfb's bind-time initialization; without them
+          # Xvfb writes nothing to stderr and exits before the first xdpyinfo poll, so the
+          # failure looks like "did not start" with an empty log.
+          sudo apt-get install -y --no-install-recommends \
+            xvfb x11-utils xauth xfonts-base \
+            libsecret-tools imagemagick python3
 
       - name: Wait for sync-server
         run: |
@@ -77,17 +83,28 @@ jobs:
           mkdir -p build/screenshots
           # Window state is rememberWindowState(1024.dp, 720.dp) → match that exactly. No WM, so
           # the Compose window opens at (0,0) without decorations.
-          Xvfb :99 -screen 0 1024x720x24 >build/screenshots/xvfb.log 2>&1 &
+          # -ac disables host-based access control (no .Xauthority round-trip needed for our
+          # in-process AWT client); -nolisten tcp keeps the X socket on a local unix path only.
+          Xvfb :99 -screen 0 1024x720x24 -ac -nolisten tcp >build/screenshots/xvfb.log 2>&1 &
           echo $! > build/screenshots/xvfb.pid
-          # Give the X server a moment to bind.
-          for attempt in $(seq 1 10); do
-            if DISPLAY=:99 xdpyinfo >/dev/null 2>&1; then
-              echo "Xvfb up after ${attempt} attempts"; exit 0
+          # Give the X server a moment to bind, then verify with a real X call.
+          for attempt in $(seq 1 20); do
+            if xdpyinfo >/dev/null 2>&1; then
+              echo "Xvfb up after ${attempt} attempts"
+              exit 0
+            fi
+            # If the Xvfb process has already died, surface that immediately rather than
+            # spinning for 20s on a dead PID.
+            if [[ ! -d /proc/$(cat build/screenshots/xvfb.pid) ]]; then
+              echo "::error::Xvfb process exited before reaching ready state" >&2
+              cat build/screenshots/xvfb.log >&2 || true
+              exit 1
             fi
             sleep 1
           done
-          echo "::error::Xvfb did not start" >&2
+          echo "::error::Xvfb did not respond on :99 within 20s" >&2
           cat build/screenshots/xvfb.log >&2 || true
+          ps -fp "$(cat build/screenshots/xvfb.pid)" >&2 || true
           exit 1
 
       - name: Seed phantom peer
