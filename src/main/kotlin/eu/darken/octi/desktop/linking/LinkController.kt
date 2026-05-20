@@ -113,6 +113,24 @@ class LinkController(
 
             val connectorId = newCredentials.toConnectorId()
 
+            // Stage 3a: duplicate refusal. The produced [ConnectorId.idString] is only known
+            // after `register()` so we have to check here (LinkingData carries no accountId).
+            // If this account is already linked on this desktop, the server just minted a
+            // second device-credential for the same account/device — accepting it would silently
+            // overwrite the existing keystore entry with the new devicePassword and break the
+            // existing connector's auth. Roll back the registration instead.
+            if (settings.data.connectors.containsKey(connectorId.idString)) {
+                log(TAG, WARN) {
+                    "Duplicate link attempt for connector=${connectorId.idString}; rolling back server registration"
+                }
+                return rollbackForAlreadyLinkedLink(
+                    address = linkingData.serverAdress,
+                    deviceId = deviceId,
+                    deviceMetadata = deviceMetadata,
+                    credentials = newCredentials,
+                )
+            }
+
             // Stage 4a: keystore. Keystore-first so a discovery entry never points at nothing.
             try {
                 credentialsStore.save(newCredentials)
@@ -185,6 +203,44 @@ class LinkController(
         } catch (rollbackCause: Throwable) {
             log(TAG, ERROR, rollbackCause) { "Rollback DELETE failed; device is orphaned on server" }
             LinkResult.OrphanedDevice(keystoreCause, rollbackCause)
+        } finally {
+            runCatching { authedClient.close() }
+                .onFailure { log(TAG, WARN, it) { "authedClient.close() failed; swallowing to preserve return value" } }
+        }
+    }
+
+    /**
+     * Rollback for the AlreadyLinked refusal in [link]. Issues an authenticated DELETE against
+     * the just-registered device so the server forgets the duplicate registration. The user's
+     * EXISTING connector for the same account is unaffected (separate credentials and a
+     * separate server-side device row from the original link). A rollback failure here is
+     * still surfaced as [LinkResult.AlreadyLinked] — the existing connector remains usable;
+     * the orphan device on the server is a server-side hygiene issue the user can fix from
+     * any other linked device (and the next link attempt will catch it as DeviceAlreadyRegistered).
+     */
+    private suspend fun rollbackForAlreadyLinkedLink(
+        address: OctiServer.Address,
+        deviceId: DeviceId,
+        deviceMetadata: DeviceMetadata,
+        credentials: OctiServer.Credentials,
+    ): LinkResult {
+        val authedClient = httpClientFactory.create(
+            address = address,
+            deviceId = deviceId,
+            deviceMetadata = deviceMetadata,
+            credentials = credentials,
+        )
+        return try {
+            authedClient.deleteDevice(deviceId)
+            log(TAG, INFO) { "AlreadyLinked rollback DELETE succeeded; duplicate device unregistered" }
+            LinkResult.AlreadyLinked
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (rollbackCause: Throwable) {
+            log(TAG, WARN, rollbackCause) {
+                "AlreadyLinked rollback DELETE failed; duplicate registration is orphaned on server"
+            }
+            LinkResult.AlreadyLinked
         } finally {
             runCatching { authedClient.close() }
                 .onFailure { log(TAG, WARN, it) { "authedClient.close() failed; swallowing to preserve return value" } }
@@ -270,6 +326,21 @@ class LinkController(
 
             val connectorId = newCredentials.toConnectorId()
 
+            // Defensive: a fresh account from the server should never collide with an existing
+            // connectorId (accountId is server-minted), but if it ever did we'd silently
+            // overwrite the existing keystore entry. Roll back the new account immediately.
+            if (settings.data.connectors.containsKey(connectorId.idString)) {
+                log(TAG, WARN) {
+                    "createAccount produced an existing connector=${connectorId.idString}; rolling back account"
+                }
+                return rollbackForAlreadyLinkedCreate(
+                    address = address,
+                    deviceId = deviceId,
+                    deviceMetadata = deviceMetadata,
+                    credentials = newCredentials,
+                )
+            }
+
             try {
                 credentialsStore.save(newCredentials)
             } catch (cancel: CancellationException) {
@@ -312,6 +383,40 @@ class LinkController(
             // bogus NetworkError. Log and swallow.
             runCatching { unauthedClient?.close() }
                 .onFailure { log(TAG, WARN, it) { "unauthedClient.close() failed; swallowing to preserve return value" } }
+        }
+    }
+
+    /**
+     * Rollback for the defensive AlreadyLinked refusal in [createAccount]. Same shape as
+     * [rollbackForAlreadyLinkedLink] but targets `DELETE /v1/account` since createAccount
+     * minted a fresh account, not just a new device on an existing one.
+     */
+    private suspend fun rollbackForAlreadyLinkedCreate(
+        address: OctiServer.Address,
+        deviceId: DeviceId,
+        deviceMetadata: DeviceMetadata,
+        credentials: OctiServer.Credentials,
+    ): CreateAccountResult {
+        val authedClient = httpClientFactory.create(
+            address = address,
+            deviceId = deviceId,
+            deviceMetadata = deviceMetadata,
+            credentials = credentials,
+        )
+        return try {
+            authedClient.deleteAccount()
+            log(TAG, INFO) { "AlreadyLinked rollback DELETE /v1/account succeeded" }
+            CreateAccountResult.AlreadyLinked
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (rollbackCause: Throwable) {
+            log(TAG, WARN, rollbackCause) {
+                "AlreadyLinked rollback DELETE /v1/account failed; duplicate account orphaned on server"
+            }
+            CreateAccountResult.AlreadyLinked
+        } finally {
+            runCatching { authedClient.close() }
+                .onFailure { log(TAG, WARN, it) { "authedClient.close() failed; swallowing to preserve return value" } }
         }
     }
 

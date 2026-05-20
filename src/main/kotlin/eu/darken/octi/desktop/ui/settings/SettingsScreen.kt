@@ -1,6 +1,7 @@
 package eu.darken.octi.desktop.ui.settings
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -13,16 +14,19 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -38,6 +42,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
@@ -47,8 +52,13 @@ import eu.darken.octi.desktop.linking.UnlinkResult
 import eu.darken.octi.desktop.modules.meta.DeviceMetadataProvider
 import eu.darken.octi.desktop.platform.PlatformDetector
 import eu.darken.octi.desktop.protocol.octiserver.OctiServer
+import eu.darken.octi.desktop.protocol.octiserver.OctiServerConnector
+import eu.darken.octi.desktop.protocol.sync.ConnectorId
 import eu.darken.octi.desktop.storage.ThemeMode
+import eu.darken.octi.desktop.sync.DeviceListRepo
+import eu.darken.octi.desktop.sync.OctiServerWebSocketClient
 import eu.darken.octi.desktop.ui.LocalAppGraph
+import eu.darken.octi.desktop.ui.nav.Screen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.swing.Swing
@@ -59,8 +69,6 @@ import kotlinx.coroutines.withContext
 fun SettingsScreen() {
     val graph = LocalAppGraph.current
     val settings by graph.settings.flow.collectAsState()
-    val primaryConnector by graph.primaryConnector.collectAsState()
-    val linkedCredentials = primaryConnector?.credentials
 
     Scaffold(
         topBar = {
@@ -90,7 +98,6 @@ fun SettingsScreen() {
                 )
                 ServerSetting(
                     createAccountServerUrl = settings.createAccountServerUrl.orEmpty(),
-                    linkedServer = linkedCredentials?.serverAdress,
                     onSave = { value ->
                         // UI commits only valid (or blank → null) values. The TextField's local
                         // state stays unconstrained between saves so the user can correct typos.
@@ -109,10 +116,7 @@ fun SettingsScreen() {
                         graph.settings.update { it.copy(clipboardAutoSync = value) }
                     },
                 )
-                EncryptionModeRow(
-                    keysetType = linkedCredentials?.encryptionKeyset?.type,
-                )
-                AccountSection(graph = graph)
+                ConnectorsSection(graph = graph)
                 AboutSection()
             }
         }
@@ -122,25 +126,18 @@ fun SettingsScreen() {
 @Composable
 private fun ServerSetting(
     createAccountServerUrl: String,
-    linkedServer: OctiServer.Address?,
     onSave: (String?) -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Server", style = MaterialTheme.typography.titleSmall)
-            if (linkedServer != null) {
-                Text(
-                    "Connected to ${linkedServer.address}. Unlink this device to change the server.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            } else {
-                Text(
-                    "URL of the Octi server the \"Create new account\" flow will use. Leave blank " +
-                        "to use the production server (${OctiServer.Official.PROD.address.address}).",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                ServerUrlEditor(initial = createAccountServerUrl, onSave = onSave)
-            }
+            Text("Server prefill", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "URL the next \"New account\" flow will prefill. Leave blank to default to the " +
+                    "production server (${OctiServer.Official.PROD.address.address}). Linked " +
+                    "connectors keep using their own server regardless of this value.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            ServerUrlEditor(initial = createAccountServerUrl, onSave = onSave)
         }
     }
 }
@@ -257,27 +254,205 @@ private fun ClipboardSetting(enabled: Boolean, onToggle: (Boolean) -> Unit) {
 }
 
 @Composable
-private fun EncryptionModeRow(keysetType: String?) {
-    val isGcmSiv = keysetType == "AES256_GCM_SIV"
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("Encryption", style = MaterialTheme.typography.titleSmall)
-            Text(
-                text = keysetType ?: "(not linked)",
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (isGcmSiv) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.error,
-            )
-            if (keysetType != null && !isGcmSiv) {
+private fun ConnectorsSection(graph: AppGraph) {
+    val connectors by graph.activeConnectors.collectAsState()
+    val settings by graph.settings.flow.collectAsState()
+    val wsStates by graph.webSocketClient.statesByConnector.collectAsState()
+    val loadStates by graph.deviceListRepo.loadStateByConnector.collectAsState()
+    val mergedDevices by graph.deviceListRepo.mergedDevices.collectAsState()
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            "Linked accounts",
+            style = MaterialTheme.typography.titleSmall,
+            modifier = Modifier.padding(start = 4.dp),
+        )
+        if (connectors.isEmpty()) {
+            // Reachable when the user unlinked every connector but stayed on Settings —
+            // navigator snaps to Linking on activeConnectors becoming empty, so this is rare
+            // but worth covering rather than rendering an empty column.
+            Card(modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    "This account is on the legacy cipher (AES256_SIV). File sharing is " +
-                        "disabled — it needs AES256_GCM_SIV. The keyset is set when the " +
-                        "account is first created on a phone; re-linking adopts the same one.",
+                    "No accounts linked. Use the Linking screen to add one.",
                     style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(16.dp),
+                )
+            }
+        } else {
+            connectors.forEach { connector ->
+                val id = connector.identifier
+                val paused = settings.connectors[id.idString]?.paused == true
+                val deviceCount = mergedDevices.count { it.sources.contains(id) }
+                ConnectorCard(
+                    graph = graph,
+                    connector = connector,
+                    paused = paused,
+                    wsState = wsStates[id],
+                    loadState = loadStates[id],
+                    deviceCount = deviceCount,
                 )
             }
         }
+        OutlinedButton(
+            onClick = { graph.navigator.navigateTo(Screen.Linking) },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Add,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+            Text("  Add another account")
+        }
     }
+}
+
+@Composable
+private fun ConnectorCard(
+    graph: AppGraph,
+    connector: OctiServerConnector,
+    paused: Boolean,
+    wsState: OctiServerWebSocketClient.ConnectionState?,
+    loadState: DeviceListRepo.LoadState?,
+    deviceCount: Int,
+) {
+    var working by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    val id = connector.identifier
+    val keysetType = connector.credentials.encryptionKeyset.type
+    val isGcmSiv = keysetType == "AES256_GCM_SIV"
+
+    // Paused cards keep all controls reachable but visually fade so the user can tell at a
+    // glance which connector is silenced. Alpha only — the buttons remain enabled.
+    Box(modifier = Modifier.alpha(if (paused) 0.55f else 1f)) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = if (paused) MaterialTheme.colorScheme.surfaceVariant
+                else MaterialTheme.colorScheme.surface,
+            ),
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            connector.accountLabel ?: connector.credentials.serverAdress.address,
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        Text(
+                            "Account ${connector.credentials.accountId.id.take(8)}…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = !paused,
+                        onCheckedChange = { wantActive -> graph.setPaused(id, paused = !wantActive) },
+                    )
+                }
+                ConnectorStatusLine(
+                    wsState = wsState,
+                    loadState = loadState,
+                    deviceCount = deviceCount,
+                    paused = paused,
+                )
+                Text(
+                    text = "Encryption: $keysetType",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (isGcmSiv) MaterialTheme.colorScheme.onSurfaceVariant
+                    else MaterialTheme.colorScheme.error,
+                )
+                if (!isGcmSiv) {
+                    Text(
+                        "Legacy keyset — file sharing is disabled for this account. The keyset is " +
+                            "set when the account is first created on a phone; re-linking adopts the same one.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                errorMessage?.let { msg ->
+                    Text(
+                        text = msg,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    Button(
+                        enabled = !working,
+                        onClick = {
+                            errorMessage = null
+                            working = true
+                            // App-scope launch — navigating away during unlink mustn't cancel
+                            // the server DELETE. UI mutations are hopped onto Swing.
+                            graph.appScope.launch {
+                                val result = try {
+                                    graph.unlink(id)
+                                } catch (cancel: kotlinx.coroutines.CancellationException) {
+                                    throw cancel
+                                } catch (e: Throwable) {
+                                    UnlinkResult.NetworkError(e)
+                                }
+                                withContext(Dispatchers.Swing) {
+                                    when (result) {
+                                        UnlinkResult.Success,
+                                        UnlinkResult.NotLinked -> Unit
+                                        is UnlinkResult.NetworkError -> errorMessage =
+                                            "Couldn't unlink: " +
+                                                (result.cause.message ?: result.cause.javaClass.simpleName) +
+                                                ". Local credentials kept; try again when online."
+                                        is UnlinkResult.LocalCleanupFailed -> errorMessage =
+                                            "The server removed this device, but clearing local " +
+                                                "credentials failed: " +
+                                                (result.cause.message ?: result.cause.javaClass.simpleName) +
+                                                ". Restart the app and try unlinking again — until " +
+                                                "that succeeds the app will reconnect to a deleted device."
+                                    }
+                                    working = false
+                                }
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        ),
+                    ) { Text(if (working) "Unlinking…" else "Unlink") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConnectorStatusLine(
+    wsState: OctiServerWebSocketClient.ConnectionState?,
+    loadState: DeviceListRepo.LoadState?,
+    deviceCount: Int,
+    paused: Boolean,
+) {
+    val wsLabel = when {
+        paused -> "Paused"
+        wsState == null -> "Idle"
+        wsState is OctiServerWebSocketClient.ConnectionState.Idle -> "Idle"
+        wsState is OctiServerWebSocketClient.ConnectionState.Connecting -> "Connecting…"
+        wsState is OctiServerWebSocketClient.ConnectionState.Connected -> "Connected"
+        wsState is OctiServerWebSocketClient.ConnectionState.Reconnecting -> "Reconnecting (attempt ${wsState.attempt})"
+        wsState is OctiServerWebSocketClient.ConnectionState.PollingFallback -> "Polling fallback"
+        else -> "Idle"
+    }
+    val deviceLabel = when {
+        paused -> "$deviceCount device(s) — last known"
+        loadState is DeviceListRepo.LoadState.Loading -> "Loading devices…"
+        loadState is DeviceListRepo.LoadState.Error -> "Device list error: ${loadState.message}"
+        else -> "$deviceCount device(s)"
+    }
+    Text(
+        text = "$wsLabel · $deviceLabel",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 @Composable
@@ -378,66 +553,3 @@ private fun PathRow(
     }
 }
 
-@Composable
-private fun AccountSection(graph: AppGraph) {
-    var working by remember { mutableStateOf(false) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-    val primaryConnector by graph.primaryConnector.collectAsState()
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Account", style = MaterialTheme.typography.titleSmall)
-            Text(
-                "Unlinking calls the server to remove this device, then clears local credentials. " +
-                    "If the server can't be reached, local state is kept so you can retry.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            errorMessage?.let { msg ->
-                Text(
-                    text = msg,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-            val targetConnectorId = primaryConnector?.identifier
-            Button(
-                enabled = !working && targetConnectorId != null,
-                onClick = {
-                    val connectorId = targetConnectorId ?: return@Button
-                    errorMessage = null
-                    working = true
-                    // Launch on the app scope so navigation away mid-unlink doesn't cancel the
-                    // server DELETE. UI mutations are hopped onto Swing explicitly — Compose
-                    // state is safest to write from the AWT EDT.
-                    graph.appScope.launch {
-                        val result = try {
-                            graph.unlink(connectorId)
-                        } catch (cancel: kotlinx.coroutines.CancellationException) {
-                            throw cancel
-                        } catch (e: Throwable) {
-                            UnlinkResult.NetworkError(e)
-                        }
-                        withContext(Dispatchers.Swing) {
-                            when (result) {
-                                UnlinkResult.Success,
-                                UnlinkResult.NotLinked -> Unit
-                                is UnlinkResult.NetworkError -> errorMessage = "Couldn't unlink: " +
-                                    (result.cause.message ?: result.cause.javaClass.simpleName) +
-                                    ". Local credentials kept; try again when online."
-                                is UnlinkResult.LocalCleanupFailed -> errorMessage = "The server " +
-                                    "removed this device, but clearing local credentials failed: " +
-                                    (result.cause.message ?: result.cause.javaClass.simpleName) +
-                                    ". Restart the app and try unlinking again — until that " +
-                                    "succeeds the app will reconnect to a deleted device."
-                            }
-                            working = false
-                        }
-                    }
-                },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer,
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                ),
-            ) { Text(if (working) "Unlinking…" else "Unlink this device") }
-        }
-    }
-}

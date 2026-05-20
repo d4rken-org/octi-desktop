@@ -26,6 +26,15 @@ sealed class CreateAccountResult {
      */
     data object DeviceAlreadyRegistered : CreateAccountResult()
 
+    /**
+     * Server minted a new account, but the produced [ConnectorId.idString] already exists in
+     * `SettingsData.connectors`. Astronomically unlikely under createAccount (the server
+     * generates a fresh accountId) but guarded defensively because if it ever did happen we'd
+     * silently overwrite the existing connector's keystore entry. Rolled back via authenticated
+     * `DELETE /v1/account`; user state is unchanged.
+     */
+    data object AlreadyLinked : CreateAccountResult()
+
     /** Network or other server-side failure during the register call itself. */
     data class NetworkError(val cause: Throwable) : CreateAccountResult()
 
