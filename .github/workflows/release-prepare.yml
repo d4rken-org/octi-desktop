@@ -30,6 +30,7 @@ on:
 
 permissions:
   contents: read
+  actions: read    # wait-for-ci.yml polls workflow-run state; reusable workflows can't elevate beyond the caller's grant
 
 concurrency:
   group: release-prepare-main
