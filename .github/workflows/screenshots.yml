@@ -111,11 +111,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build/screenshots
-          # Window state is rememberWindowState(1024.dp, 720.dp) → match that exactly. No WM, so
-          # the Compose window opens at (0,0) without decorations.
+          # Headroom around the 1024x720 Compose window: without a WM, AWT picks the window
+          # position on its own, and on the first run that landed it offset enough that the
+          # right edge clipped a few dozen pixels. Give it ~100px slack on each axis; the
+          # frame-aware DebugScreenshot crops to the actual window bounds so the surplus is
+          # never visible in captured images.
           # -ac disables host-based access control (no .Xauthority round-trip needed for our
           # in-process AWT client); -nolisten tcp keeps the X socket on a local unix path only.
-          Xvfb :99 -screen 0 1024x720x24 -ac -nolisten tcp >build/screenshots/xvfb.log 2>&1 &
+          Xvfb :99 -screen 0 1200x820x24 -ac -nolisten tcp >build/screenshots/xvfb.log 2>&1 &
           echo $! > build/screenshots/xvfb.pid
           # Give the X server a moment to bind, then verify with a real X call.
           for attempt in $(seq 1 20); do
