@@ -249,7 +249,7 @@ jobs:
           # place rather than spawning a fresh one per run.
           git push --force --set-upstream origin "$BRANCH"
 
-          if gh pr view "$BRANCH" --json number >/dev/null 2>&1; then
+          if [[ -n "$(gh pr list --state open --head "$BRANCH" --json number --jq '.[0].number')" ]]; then
             echo "PR already open for $BRANCH; pushed an update."
           else
             gh pr create --base main --head "$BRANCH" \
