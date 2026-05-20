@@ -7,6 +7,7 @@ import eu.darken.octi.desktop.di.AppGraph
 import eu.darken.octi.desktop.linking.CreateAccountResult
 import eu.darken.octi.desktop.linking.LinkResult
 import eu.darken.octi.desktop.protocol.octiserver.OctiServer
+import eu.darken.octi.desktop.ui.nav.Screen
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -107,6 +108,7 @@ class LinkingViewModel(private val graph: AppGraph) {
         _state.value = when (result) {
             is LinkResult.Success -> {
                 graph.onLinked(result.connectorId, result.credentials)
+                navigateAfterSuccess()
                 LinkingUiState.Idle
             }
             LinkResult.InvalidBase64 -> LinkingUiState.Error(
@@ -123,6 +125,9 @@ class LinkingViewModel(private val graph: AppGraph) {
             )
             LinkResult.ShareCodeExpiredOrConsumed -> LinkingUiState.Error(
                 "Link code expired or already used (codes are valid for 60 minutes). Generate a new one on your phone.",
+            )
+            LinkResult.AlreadyLinked -> LinkingUiState.Error(
+                "This account is already linked on this device. Open Settings to see your linked accounts.",
             )
             is LinkResult.NetworkError -> LinkingUiState.Error(
                 "Couldn't reach the Octi server: ${result.cause.message ?: result.cause.javaClass.simpleName}.",
@@ -144,6 +149,7 @@ class LinkingViewModel(private val graph: AppGraph) {
         _state.value = when (result) {
             is CreateAccountResult.Success -> {
                 graph.onLinked(result.connectorId, result.credentials)
+                navigateAfterSuccess()
                 LinkingUiState.Idle
             }
             CreateAccountResult.DeviceAlreadyRegistered -> LinkingUiState.Error(
@@ -151,6 +157,9 @@ class LinkingViewModel(private val graph: AppGraph) {
                     "is already registered — open Octi on another linked device and remove this " +
                     "one from the device list, then try again. If the problem persists, the server " +
                     "may have rejected the request for a different reason.",
+            )
+            CreateAccountResult.AlreadyLinked -> LinkingUiState.Error(
+                "The new account collides with a connector you already have linked. Open Settings to inspect.",
             )
             is CreateAccountResult.NetworkError -> LinkingUiState.Error(
                 "Couldn't reach the Octi server: ${result.cause.message ?: result.cause.javaClass.simpleName}.",
@@ -170,6 +179,28 @@ class LinkingViewModel(private val graph: AppGraph) {
 
     fun dismissError() {
         if (_state.value is LinkingUiState.Error) _state.value = LinkingUiState.Idle
+    }
+
+    /**
+     * Decide where to go after [onLinked] returns. The derivation is implicit:
+     *  - if [AppGraph.activeConnectors] now contains exactly one connector this was the first
+     *    link — clear-stack to Dashboard, which is the post-link home.
+     *  - if there's more than one this was "add another account" reached from Settings — pop
+     *    the back stack to return there. Falls back to navigateTo(Settings) if the back stack
+     *    is unexpectedly empty (e.g. user reached Linking via debug RPC while already linked).
+     *
+     * Reading after [graph.onLinked] runs is intentional — it has already appended the new
+     * connector to [activeConnectors] so the count includes it.
+     */
+    private fun navigateAfterSuccess() {
+        val totalConnectors = graph.activeConnectors.value.size
+        if (totalConnectors <= 1) {
+            graph.navigator.navigateTo(Screen.Dashboard, clearStack = true)
+        } else {
+            if (!graph.navigator.pop()) {
+                graph.navigator.navigateTo(Screen.Settings, clearStack = true)
+            }
+        }
     }
 }
 

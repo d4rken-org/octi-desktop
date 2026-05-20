@@ -143,6 +143,10 @@ class AppGraph private constructor(
      * Called by the Link flow on [LinkResult.Success]. [LinkController] has already committed
      * the keystore entry AND the [Settings] discovery entry; this is purely in-memory state
      * mutation: build the connector and add it to [activeConnectors].
+     *
+     * Navigation is the caller's responsibility — a first-time link wants to clear-stack to
+     * Dashboard while "add another account" wants to return to wherever the user came from.
+     * The view model passes the right [Screen] based on its [eu.darken.octi.desktop.ui.linking.LinkingPurpose].
      */
     fun onLinked(connectorId: ConnectorId, credentials: OctiServer.Credentials) {
         val metadata = DeviceMetadataProvider.current(userLabel = settings.data.deviceLabel)
@@ -160,7 +164,24 @@ class AppGraph private constructor(
             }
             existing.filterNot { it.identifier == connectorId } + connector
         }
-        navigator.navigateTo(Screen.Dashboard, clearStack = true)
+    }
+
+    /**
+     * Flip a connector's paused flag in `Settings.connectors`. The reactive [runningConnectors]
+     * derives from it, so the per-connector WS loop in [OctiServerWebSocketClient] and the poll
+     * loop in [DeviceListRepo] cancel/restart on their next emission without any extra wiring
+     * here. UI calls this from the Settings card's Pause toggle.
+     */
+    fun setPaused(connectorId: ConnectorId, paused: Boolean) {
+        val key = connectorId.idString
+        settings.update { current ->
+            val entry = current.connectors[key] ?: return@update current
+            if (entry.paused == paused) current
+            else current.copy(connectors = current.connectors + (key to entry.copy(paused = paused)))
+        }
+        log(TAG, Logging.Priority.INFO) {
+            "setPaused(${connectorId.logLabel}, paused=$paused)"
+        }
     }
 
     /**
@@ -218,7 +239,12 @@ class AppGraph private constructor(
         ) { params ->
             val code = params["code"]?.jsonPrimitive?.content ?: error("missing code")
             val result = linkController.link(code, deviceId)
-            if (result is LinkResult.Success) onLinked(result.connectorId, result.credentials)
+            if (result is LinkResult.Success) {
+                onLinked(result.connectorId, result.credentials)
+                // Debug-RPC drives the first-link path (used by screenshot CI + manual testing);
+                // matches the firstLink behavior of the LinkingViewModel.
+                navigator.navigateTo(Screen.Dashboard, clearStack = true)
+            }
             buildJsonObject {
                 put("result", JsonPrimitive(result::class.simpleName ?: "Unknown"))
             }

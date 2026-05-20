@@ -501,4 +501,160 @@ class LinkControllerTest {
         coVerify(exactly = 1) { authedClient.deleteAccount() }
         verify { authedClient.close() }
     }
+
+    // --- AlreadyLinked refusal ---
+
+    @Test
+    @DisplayName("link: produced connectorId already in Settings.connectors → DELETE rollback → AlreadyLinked; keystore + settings untouched")
+    fun linkAlreadyLinkedRefused() = runTest {
+        val unauthedClient = mockk<OctiServerHttpClient>(relaxed = true)
+        coEvery { unauthedClient.register(shareCode = any()) } returns RegisterResponse(
+            accountID = "acct-existing",
+            password = "pw-existing",
+        )
+
+        val authedClient = mockk<OctiServerHttpClient>(relaxed = true)
+        coEvery { authedClient.deleteDevice(any()) } returns Unit
+
+        val callIndex = AtomicInteger(0)
+        val factory = LinkController.HttpClientFactory { _, _, _, credentials ->
+            when (callIndex.getAndIncrement()) {
+                0 -> {
+                    check(credentials == null) { "first factory call must be unauthed" }
+                    unauthedClient
+                }
+                1 -> {
+                    check(credentials != null) { "rollback factory call must carry credentials" }
+                    credentials.accountId.id shouldBe "acct-existing"
+                    authedClient
+                }
+                else -> error("factory called more than twice")
+            }
+        }
+
+        // Pre-populate Settings.connectors with an entry whose idString matches what register
+        // will produce — same server domain, same accountId. The link attempt must refuse with
+        // AlreadyLinked and roll back the server-side duplicate registration.
+        val settings = newSettings()
+        val existingConnectorId = eu.darken.octi.desktop.protocol.sync.ConnectorId(
+            type = eu.darken.octi.desktop.protocol.sync.ConnectorType.OCTISERVER,
+            subtype = "test.example.com",
+            account = "acct-existing",
+        )
+        settings.update { current ->
+            current.copy(
+                connectors = current.connectors + (
+                    existingConnectorId.idString to eu.darken.octi.desktop.storage.ConnectorConfig(existingConnectorId)
+                ),
+            )
+        }
+        val originalConnectorsSnapshot = settings.data.connectors
+
+        val store = CredentialsStore(newKeystore())
+        val controller = newController(store = store, factory = factory, settings = settings)
+
+        val result = controller.link(validEncodedLink(), newDeviceId)
+        result shouldBe LinkResult.AlreadyLinked
+        coVerify(exactly = 1) { authedClient.deleteDevice(newDeviceId) }
+        // Settings.connectors is exactly what it was before the link attempt — no overwrite,
+        // no extra entry.
+        settings.data.connectors shouldBe originalConnectorsSnapshot
+        // Keystore stays empty: no save happened.
+        store.load(existingConnectorId) shouldBe null
+        verify { unauthedClient.close() }
+        verify { authedClient.close() }
+        callIndex.get() shouldBe 2
+    }
+
+    @Test
+    @DisplayName("link: AlreadyLinked rollback DELETE itself fails → still returns AlreadyLinked; server-side orphan is informational")
+    fun linkAlreadyLinkedRollbackFails() = runTest {
+        val unauthedClient = mockk<OctiServerHttpClient>(relaxed = true)
+        coEvery { unauthedClient.register(shareCode = any()) } returns RegisterResponse(
+            accountID = "acct-existing",
+            password = "pw-existing",
+        )
+        val authedClient = mockk<OctiServerHttpClient>(relaxed = true)
+        coEvery { authedClient.deleteDevice(any()) } throws RuntimeException("server unreachable")
+
+        val callIndex = AtomicInteger(0)
+        val factory = LinkController.HttpClientFactory { _, _, _, _ ->
+            if (callIndex.getAndIncrement() == 0) unauthedClient else authedClient
+        }
+
+        val settings = newSettings()
+        val existingConnectorId = eu.darken.octi.desktop.protocol.sync.ConnectorId(
+            type = eu.darken.octi.desktop.protocol.sync.ConnectorType.OCTISERVER,
+            subtype = "test.example.com",
+            account = "acct-existing",
+        )
+        settings.update { current ->
+            current.copy(
+                connectors = current.connectors + (
+                    existingConnectorId.idString to eu.darken.octi.desktop.storage.ConnectorConfig(existingConnectorId)
+                ),
+            )
+        }
+
+        val controller = newController(factory = factory, settings = settings)
+        // The user's existing connector is unaffected; the orphan duplicate registration on the
+        // server is a server-side hygiene issue, not a local-state failure — surfaced as plain
+        // AlreadyLinked rather than an OrphanedDevice variant.
+        controller.link(validEncodedLink(), newDeviceId) shouldBe LinkResult.AlreadyLinked
+        verify { authedClient.close() }
+    }
+
+    @Test
+    @DisplayName("createAccount: defensive AlreadyLinked check fires on idString collision → DELETE /v1/account rollback → AlreadyLinked")
+    fun createAccountAlreadyLinkedDefensive() = runTest {
+        val unauthedClient = mockk<OctiServerHttpClient>(relaxed = true)
+        coEvery { unauthedClient.register(shareCode = null) } returns RegisterResponse(
+            accountID = "acct-collision",
+            password = "pw-collision",
+        )
+        val authedClient = mockk<OctiServerHttpClient>(relaxed = true)
+        coEvery { authedClient.deleteAccount() } returns Unit
+
+        val callIndex = AtomicInteger(0)
+        val factory = LinkController.HttpClientFactory { _, _, _, credentials ->
+            when (callIndex.getAndIncrement()) {
+                0 -> {
+                    check(credentials == null)
+                    unauthedClient
+                }
+                1 -> {
+                    check(credentials != null) { "rollback factory call must carry credentials" }
+                    credentials.accountId.id shouldBe "acct-collision"
+                    authedClient
+                }
+                else -> error("factory called more than twice")
+            }
+        }
+
+        val settings = newSettings()
+        val existingConnectorId = eu.darken.octi.desktop.protocol.sync.ConnectorId(
+            type = eu.darken.octi.desktop.protocol.sync.ConnectorType.OCTISERVER,
+            subtype = "fresh.example.com",
+            account = "acct-collision",
+        )
+        settings.update { current ->
+            current.copy(
+                connectors = current.connectors + (
+                    existingConnectorId.idString to eu.darken.octi.desktop.storage.ConnectorConfig(existingConnectorId)
+                ),
+            )
+        }
+        val originalConnectorsSnapshot = settings.data.connectors
+
+        val store = CredentialsStore(newKeystore())
+        val controller = newController(store = store, factory = factory, settings = settings, gcmSivAvailable = { true })
+
+        val target = OctiServer.Address(domain = "fresh.example.com")
+        val result = controller.createAccount(newDeviceId, target)
+        result shouldBe CreateAccountResult.AlreadyLinked
+        coVerify(exactly = 1) { authedClient.deleteAccount() }
+        settings.data.connectors shouldBe originalConnectorsSnapshot
+        store.load(existingConnectorId) shouldBe null
+        verify { authedClient.close() }
+    }
 }

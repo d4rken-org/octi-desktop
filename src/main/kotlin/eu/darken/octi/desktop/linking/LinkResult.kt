@@ -36,6 +36,18 @@ sealed class LinkResult {
     /** Server rejected the share code as expired or already consumed. (HTTP 401/404 path.) */
     data object ShareCodeExpiredOrConsumed : LinkResult()
 
+    /**
+     * Server consumed the share code and returned credentials, but the resulting
+     * [ConnectorId.idString] is already present in `SettingsData.connectors` — this account is
+     * already linked on this desktop. The controller has rolled back via server `DELETE
+     * /v1/devices/{self}` so the duplicate registration is gone; user state is unchanged.
+     *
+     * Why post-register rather than pre-register: `LinkingData` doesn't carry `accountId`, so
+     * the produced `ConnectorId` is only known after `register()` returns. The dup check has
+     * to happen after the share code is consumed.
+     */
+    data object AlreadyLinked : LinkResult()
+
     /** Network or other server-side failure during the link call itself. */
     data class NetworkError(val cause: Throwable) : LinkResult()
 
