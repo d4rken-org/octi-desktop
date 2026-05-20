@@ -1,0 +1,146 @@
+name: Wait for CI
+
+# Reusable workflow that blocks until the named CI workflows complete successfully on a given
+# commit SHA. Used by release-prepare.yml (before pushing a v* tag) and release-canary.yml
+# (before building installers) so a broken main can never publish a release.
+#
+# Filters the API query by event=push + branch to avoid picking up unrelated PR runs that happen
+# to share head_sha. Polls every 20s, retries transient API errors, fails fast on non-success
+# conclusions or timeout.
+
+on:
+  workflow_call:
+    inputs:
+      target-sha:
+        description: 'Commit SHA to wait for CI on. Caller must pass the peeled commit SHA, not a tag object SHA.'
+        required: true
+        type: string
+      branch:
+        description: 'Branch the CI runs must have triggered against. Used to filter the API query.'
+        required: false
+        default: main
+        type: string
+      required-workflows:
+        description: 'Comma-separated workflow filenames (e.g. "code-checks.yml,gradle-wrapper-validation.yml"). Each must reach conclusion=success on target-sha.'
+        required: true
+        type: string
+      timeout-minutes:
+        description: 'Total wall-clock budget across all required workflows. Polling exits with a timeout error after this.'
+        required: false
+        default: 60
+        type: number
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  wait:
+    name: Wait for CI on ${{ inputs.target-sha }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - name: Poll required workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ inputs.target-sha }}
+          BRANCH: ${{ inputs.branch }}
+          REQUIRED: ${{ inputs.required-workflows }}
+          BUDGET_MIN: ${{ inputs.timeout-minutes }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Defensive: ensure target-sha is a 40-char hex (peeled commit, not a tag object name).
+          # Catches "github.ref_name" / tag name pass-through misuse at the caller.
+          echo "$SHA" | grep -qE '^[0-9a-f]{40}$' || {
+            echo "::error::target-sha '$SHA' is not a 40-char commit SHA. The caller must peel annotated tags before invoking this workflow."
+            exit 1
+          }
+
+          IFS=',' read -ra WORKFLOWS <<<"$REQUIRED"
+          deadline=$(( $(date +%s) + BUDGET_MIN * 60 ))
+
+          # gh_api_retry: wraps `gh api` so transient 5xx / network errors don't kill the gate.
+          # Returns the body on success, empty on transient failure. Auth/permission errors
+          # (4xx other than 404) still fail the script via `set -e` when the caller checks the
+          # exit code path — handled below by treating "no body" as "retry later".
+          gh_api_retry() {
+            local path="$1"
+            local out
+            local rc
+            for attempt in 1 2 3; do
+              out=$(gh api "$path" 2>&1) && { echo "$out"; return 0; }
+              rc=$?
+              # If the failure looks like auth/permission/not-found, surface and abort.
+              # gh prints HTTP status in its error message ("HTTP 401", "HTTP 403", "HTTP 404").
+              if grep -qE 'HTTP (401|403|404)' <<<"$out"; then
+                echo "::error::gh api '$path' failed with auth/permission error: $out" >&2
+                return "$rc"
+              fi
+              echo "transient gh api error (attempt $attempt): $out" >&2
+              sleep 5
+            done
+            # Three transient failures in a row — return empty, caller retries the whole poll.
+            return 0
+          }
+
+          for wf in "${WORKFLOWS[@]}"; do
+            wf=$(echo "$wf" | tr -d '[:space:]')
+            [[ -n "$wf" ]] || continue
+            echo "::group::Waiting for $wf on $SHA (branch=$BRANCH)"
+            conclusion=""
+            while :; do
+              now=$(date +%s)
+              if (( now > deadline )); then
+                echo "::error::timed out after ${BUDGET_MIN} min waiting for $wf on $SHA"
+                exit 1
+              fi
+
+              # Filter by event=push + branch + head_sha so PR runs sharing the same head_sha
+              # can't satisfy the gate. per_page=5 picks up retries / reruns; we sort by
+              # created_at desc (the API default) and take the most recent matching entry.
+              body=$(gh_api_retry "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf}/runs?event=push&branch=${BRANCH}&head_sha=${SHA}&per_page=5" || echo "")
+
+              if [[ -z "$body" ]]; then
+                echo "$wf: no API response yet (transient or not registered) — sleeping 20s..."
+                sleep 20
+                continue
+              fi
+
+              # Pick the most recent run that strictly matches our criteria. Defensive double-check
+              # of the fields in case the API ignores any of the query params.
+              run=$(jq -c --arg sha "$SHA" --arg branch "$BRANCH" '
+                .workflow_runs
+                | map(select(.event == "push" and .head_branch == $branch and .head_sha == $sha))
+                | sort_by(.created_at) | reverse | .[0] // empty
+              ' <<<"$body")
+
+              if [[ -z "$run" || "$run" == "null" ]]; then
+                echo "$wf: no matching push run for SHA=$SHA on branch=$BRANCH yet — sleeping 20s..."
+                sleep 20
+                continue
+              fi
+
+              status=$(jq -r .status <<<"$run")
+              run_id=$(jq -r .id <<<"$run")
+              run_url=$(jq -r .html_url <<<"$run")
+
+              if [[ "$status" == "completed" ]]; then
+                conclusion=$(jq -r .conclusion <<<"$run")
+                echo "$wf completed: conclusion=$conclusion (run $run_id) $run_url"
+                break
+              fi
+
+              echo "$wf status=$status (run $run_id) $run_url — sleeping 20s..."
+              sleep 20
+            done
+
+            if [[ "$conclusion" != "success" ]]; then
+              echo "::error::$wf concluded with '$conclusion' on $SHA — refusing to proceed"
+              exit 1
+            fi
+            echo "::endgroup::"
+          done
+
+          echo "All required CI workflows passed on $SHA"

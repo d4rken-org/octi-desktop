@@ -151,13 +151,19 @@ jobs:
             echo "| Dry run  | \`$DRY_RUN\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  push-and-dispatch:
-    name: Push bump and tag
+  # Two-step push (bump first, tag only after CI green) ensures `v*` tags never exist for a
+  # commit that failed CI. The previous atomic push could leave stranded tags on a broken main.
+  # Trade-off: if push-tag fails or is cancelled between bump-push and tag-push, the bump commit
+  # remains on main without a tag — recover by reverting it or re-running with the next version.
+  push-bump:
+    name: Push version bump commit
     needs: compute-and-validate
     if: ${{ !inputs.dry_run }}
     permissions:
       contents: read
     runs-on: ubuntu-24.04
+    outputs:
+      bump_sha: ${{ steps.push.outputs.bump_sha }}
 
     steps:
       - name: Mint GitHub App token
@@ -233,30 +239,113 @@ jobs:
           git config user.name "$GIT_USER_NAME"
           git config user.email "$GIT_USER_EMAIL"
 
-      - name: Commit and tag
+      - name: Commit bump
         env:
           NEW: ${{ needs.compute-and-validate.outputs.new_name }}
         run: |
           set -euo pipefail
           git add gradle.properties
           git commit -m "Release: v${NEW}"
-          git tag -a "v${NEW}" -m "Release v${NEW}"
 
-      - name: Atomic push
+      - name: Push bump commit (no tag yet)
+        id: push
+        run: |
+          set -euo pipefail
+          git push origin HEAD:refs/heads/main
+          bump_sha=$(git rev-parse HEAD)
+          echo "bump_sha=${bump_sha}" >> "$GITHUB_OUTPUT"
+          echo "Pushed bump commit ${bump_sha} to main. Waiting for CI before pushing tag."
+
+  # Gate the tag push on green CI. The bump commit just landed on main; code-checks.yml and
+  # gradle-wrapper-validation.yml both trigger on that push and run against the same SHA we
+  # output above. wait-for-ci polls until both reach conclusion=success or the budget expires.
+  wait-for-ci:
+    name: Wait for CI on bump commit
+    needs: [compute-and-validate, push-bump]
+    if: ${{ !inputs.dry_run }}
+    uses: ./.github/workflows/wait-for-ci.yml
+    with:
+      target-sha: ${{ needs.push-bump.outputs.bump_sha }}
+      branch: main
+      required-workflows: code-checks.yml,gradle-wrapper-validation.yml
+      timeout-minutes: 60
+
+  push-tag:
+    name: Push release tag
+    needs: [compute-and-validate, push-bump, wait-for-ci]
+    if: ${{ !inputs.dry_run }}
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Mint GitHub App token
+        # App tokens are short-lived (~1h); re-mint here rather than try to pass one across jobs.
+        # The release-tag protection ruleset uses the same bypass-actor (d4rken-org-releaser).
+        id: app-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 #v3.1.1
+        with:
+          client-id: ${{ secrets.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - name: Resolve bot identity
+        id: bot
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          user_id=$(gh api "/users/${APP_SLUG}%5Bbot%5D" --jq .id)
+          echo "user_name=${APP_SLUG}[bot]" >> "$GITHUB_OUTPUT"
+          echo "user_email=${user_id}+${APP_SLUG}[bot]@users.noreply.github.com" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout bump commit with App token
+        # Pin checkout to the exact bump SHA push-bump created. If main has moved (a non-release
+        # PR merged during the CI wait), checking out 'main' would tag the wrong commit.
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd #v6.0.2
+        with:
+          ref: ${{ needs.push-bump.outputs.bump_sha }}
+          fetch-depth: 0
+          persist-credentials: true
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Verify HEAD matches the CI-green bump SHA
+        env:
+          EXPECTED: ${{ needs.push-bump.outputs.bump_sha }}
+        run: |
+          set -euo pipefail
+          got=$(git rev-parse HEAD)
+          [[ "$got" == "$EXPECTED" ]] || {
+            echo "::error::HEAD '$got' does not match the CI-green bump SHA '$EXPECTED'"
+            exit 1
+          }
+
+      - name: Configure git identity
+        env:
+          GIT_USER_NAME: ${{ steps.bot.outputs.user_name }}
+          GIT_USER_EMAIL: ${{ steps.bot.outputs.user_email }}
+        run: |
+          set -euo pipefail
+          git config user.name "$GIT_USER_NAME"
+          git config user.email "$GIT_USER_EMAIL"
+
+      - name: Create and push tag
         env:
           NEW: ${{ needs.compute-and-validate.outputs.new_name }}
         run: |
           set -euo pipefail
-          git push --atomic origin HEAD:refs/heads/main "refs/tags/v${NEW}"
+          git tag -a "v${NEW}" -m "Release v${NEW}"
+          git push origin "refs/tags/v${NEW}"
 
       - name: Write final summary
         env:
           NEW: ${{ needs.compute-and-validate.outputs.new_name }}
           REPO: ${{ github.repository }}
+          BUMP_SHA: ${{ needs.push-bump.outputs.bump_sha }}
         run: |
           set -euo pipefail
           {
-            echo "Pushed commit and tag \`v${NEW}\` to main."
+            echo "Pushed tag \`v${NEW}\` pointing at \`${BUMP_SHA}\` (CI green)."
             echo "The \`release-tag.yml\` workflow fired automatically — track it at:"
             echo "https://github.com/${REPO}/actions/workflows/release-tag.yml"
           } >> "$GITHUB_STEP_SUMMARY"
