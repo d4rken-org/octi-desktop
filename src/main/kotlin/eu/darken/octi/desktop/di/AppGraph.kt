@@ -22,6 +22,7 @@ import eu.darken.octi.desktop.storage.keystore.Keystore
 import eu.darken.octi.desktop.storage.keystore.KeystoreFactory
 import eu.darken.octi.desktop.sync.DeviceListRepo
 import eu.darken.octi.desktop.sync.ModuleReader
+import eu.darken.octi.desktop.sync.ModuleResolver
 import eu.darken.octi.desktop.sync.OctiServerWebSocketClient
 import eu.darken.octi.desktop.sync.SyncEventBus
 import eu.darken.octi.desktop.ui.dashboard.DashboardModuleRepo
@@ -112,6 +113,7 @@ class AppGraph private constructor(
      */
     val syncEventBus: SyncEventBus = SyncEventBus()
     val deviceListRepo: DeviceListRepo by lazy { DeviceListRepo(this) }
+    val moduleResolver: ModuleResolver by lazy { ModuleResolver(this) }
     val moduleReader: ModuleReader by lazy { ModuleReader(this) }
     val webSocketClient: OctiServerWebSocketClient by lazy {
         OctiServerWebSocketClient(this, syncEventBus)
