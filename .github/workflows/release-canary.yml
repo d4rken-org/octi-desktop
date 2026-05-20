@@ -64,9 +64,25 @@ jobs:
           echo "version_override=${base_numeric}-canary.${short}" >> "$GITHUB_OUTPUT"
           echo "short_sha=${short}" >> "$GITHUB_OUTPUT"
 
+  # Gate the installer matrix on CI passing for the same SHA. code-checks.yml + gradle-wrapper
+  # -validation.yml fire on the same push-to-main event that triggered this workflow; both run
+  # in parallel with compute-version above. We wait here so a red CI never produces a canary.
+  # Depends on compute-version so a malformed dispatch fails fast rather than waiting 60 min.
+  # Also fail-closed on workflow_dispatch: no carve-out for "I trust this SHA" — if CI isn't
+  # green on this commit, we refuse to publish.
+  wait-for-ci:
+    name: Wait for CI
+    needs: [compute-version]
+    uses: ./.github/workflows/wait-for-ci.yml
+    with:
+      target-sha: ${{ github.sha }}
+      branch: main
+      required-workflows: code-checks.yml,gradle-wrapper-validation.yml
+      timeout-minutes: 60
+
   build:
     name: Build installers
-    needs: [compute-version]
+    needs: [compute-version, wait-for-ci]
     concurrency:
       group: release-canary-build-${{ github.repository }}
       cancel-in-progress: true

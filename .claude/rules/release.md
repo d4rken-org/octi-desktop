@@ -9,11 +9,15 @@ canonical commentary. Differences specific to octi-desktop are below.
 release-prepare.yml (workflow_dispatch)
   └─ Job 1: compute-and-validate  (always)
        reads gradle.properties version=, computes next, checks tag collision, writes summary
-  └─ Job 2: push-and-dispatch  (only when dry_run=false)
-       mints d4rken-org-releaser App token, bumps gradle.properties, commits "Release: vX.Y.Z",
-       tags, atomic push
+  └─ Job 2: push-bump  (only when dry_run=false)
+       mints App token, bumps gradle.properties, commits "Release: vX.Y.Z",
+       pushes the commit to main (NO tag yet), emits bump_sha output
+  └─ Job 3: wait-for-ci  (calls wait-for-ci.yml on the bump SHA)
+       polls code-checks.yml + gradle-wrapper-validation.yml; fails on red or 60-min timeout
+  └─ Job 4: push-tag  (only when CI is green)
+       re-mints App token, checks out the bump SHA, creates and pushes the v* tag
            │
-           └─► release-tag.yml fires automatically from the App-token push
+           └─► release-tag.yml fires automatically from the App-token tag push
                  └─ validate-tag                  regex + gradle.properties consistency
                  └─ build (calls build-installers.yml, channel=stable)
                        └─ build-linux             ubuntu-22.04 → .deb + .rpm + .AppImage + .tar.gz
@@ -112,7 +116,38 @@ repo ever moves again, the App install + bypass-actor entries follow the new loc
 either hand-edit the GitHub Release body to something useful, or accept the empty changelog.
 Subsequent releases auto-populate from PR titles.
 
+## CI gate on releases
+
+Both `release-prepare.yml` (stable) and `release-canary.yml` block on `code-checks.yml` +
+`gradle-wrapper-validation.yml` reaching `conclusion=success` on the target commit before any
+tag is pushed or installer is built. Implementation lives in the reusable
+`.github/workflows/wait-for-ci.yml` and filters API queries by `event=push` + `branch=main` so
+PR runs sharing a head_sha can't satisfy the gate.
+
+Invariant: **a `v*` tag existing implies CI was green on that commit.** The previous flow used
+an atomic `git push --atomic ... HEAD:refs/heads/main refs/tags/vX.Y.Z`, which could leave a
+public tag pointing at a commit that later failed CI. The two-step push eliminates this class
+of bug — the tag is only pushed after `wait-for-ci` reports success.
+
+Canary doesn't push a tag for each build, but it does fail-closed on CI: a canary publish on
+a SHA whose CI failed is refused. `workflow_dispatch` does not bypass the gate.
+
+If `wait-for-ci` times out at 60 min, the most common cause is a stuck cross-OS test matrix —
+investigate that workflow first rather than re-dispatching release-prepare.
+
 ## Recovery procedures
+
+**release-prepare crashes between push-bump and push-tag** (bump commit on main, no tag,
+no release-tag.yml run yet):
+1. Decide whether to recover the same version or move on. The bump commit alone is harmless —
+   `gradle.properties` reports a newer version but the codebase otherwise matches the previous
+   tag.
+2. Easiest path: revert the bump commit, re-run `release-prepare.yml` with the original
+   version unchanged. `git revert <bump-sha>` + push, then dispatch with the same `version=`
+   override.
+3. Alternative: if CI was actually green and only the tag-push step failed (token issue, etc.),
+   you can push the tag manually: `git tag -a vX.Y.Z <bump-sha> -m "Release vX.Y.Z" && git push
+   origin vX.Y.Z` — but only do this after confirming the bump SHA's CI succeeded.
 
 **Build failure after tag push** (one matrix job failed, tag exists, gradle.properties bumped):
 1. Fix the underlying issue on `main`.
