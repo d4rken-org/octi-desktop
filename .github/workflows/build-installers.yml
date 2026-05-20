@@ -407,6 +407,17 @@ jobs:
           if ($env:CHANNEL -ne "stable") { $gradleArgs += "-Pchannel=$($env:CHANNEL)" }
           .\gradlew.bat @gradleArgs packageMsi createDistributable
 
+      # The Gradle daemon keeps an OS-level lock on files like
+      # caches/modules-2/modules-2.lock after the build step returns; on Windows that
+      # blocks the Post Setup tar (Device or resource busy → exit 2). Linux/macOS
+      # advisory-lock semantics don't have this issue. Stop the daemon so
+      # actions/cache can read the cache directory.
+      - name: Stop Gradle daemon
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        run: .\gradlew.bat --stop
+
       - name: Dump jpackage logs on failure
         if: failure()
         shell: pwsh
