@@ -39,12 +39,24 @@ for attempt in $(seq 1 60); do
 done
 
 # --- Extract the debug RPC token from the app's banner ---
-TOKEN=$(grep -E "DEBUG_RPC url=.* token=" "$APP_LOG" | tail -1 | sed -E 's/.*token=([A-Za-z0-9_-]+).*/\1/')
-if [[ -z "${TOKEN:-}" ]]; then
-  echo "::error::could not find debug RPC token in ${APP_LOG}" >&2
+# JVM stdout can lag the /dev/health readiness response by a couple of seconds (Logback's
+# ConsoleAppender flushes per-event, but the underlying file write can still trail the network
+# socket bind). Poll with grep -q (which doesn't trip pipefail when there's no match yet)
+# instead of a single shot that would kill the script under set -e + pipefail.
+TOKEN=""
+for attempt in $(seq 1 30); do
+  if grep -qE "DEBUG_RPC url=.* token=" "$APP_LOG" 2>/dev/null; then
+    TOKEN=$(grep -E "DEBUG_RPC url=.* token=" "$APP_LOG" | tail -1 | sed -E 's/.*token=([A-Za-z0-9_-]+).*/\1/')
+    break
+  fi
+  sleep 1
+done
+if [[ -z "$TOKEN" ]]; then
+  echo "::error::could not find debug RPC token in ${APP_LOG} after 30s" >&2
   tail -200 "$APP_LOG" >&2 || true
   exit 1
 fi
+echo "  found debug RPC token"
 
 auth() {
   curl -sf -H "X-Debug-Token: ${TOKEN}" "$@"
