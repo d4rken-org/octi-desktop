@@ -137,6 +137,14 @@ tasks.test {
     // leave `./gradlew test` UP-TO-DATE and never exercise the new fixtures.
     inputs.file(layout.projectDirectory.file("fixture-lock.json"))
         .withPathSensitivity(PathSensitivity.RELATIVE)
+    // Same reasoning for INTEROP_FIXTURE_OVERRIDES (read by SyncRefResolver). The upstream
+    // gating CI workflow sets this to a PR HEAD SHA; without declaring it as an input,
+    // a second `./gradlew test` invocation with a different override could be skipped as
+    // UP-TO-DATE against the prior cached result.
+    inputs.property(
+        "INTEROP_FIXTURE_OVERRIDES",
+        providers.environmentVariable("INTEROP_FIXTURE_OVERRIDES").orElse(""),
+    )
 }
 
 val smokeTestSourceSet = sourceSets.create("smokeTest") {
