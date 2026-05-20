@@ -15,7 +15,7 @@ Desktop companion for [Octi](https://github.com/d4rken-org/octi) — view your p
 Two release channels are published as [GitHub Releases](https://github.com/d4rken-org/octi-desktop/releases):
 
 - **[Stable](https://github.com/d4rken-org/octi-desktop/releases/latest)** — the build to use unless you have a reason not to.
-- **[Nightly](https://github.com/d4rken-org/octi-desktop/releases/tag/nightly)** — rebuilt on every merge to `main`, installs as a separate "Octi Nightly" app that coexists with your stable install.
+- **[Canary](https://github.com/d4rken-org/octi-desktop/releases/tag/canary)** — bleeding-edge build, rebuilt on every merge to `main`. Installs as a separate "Octi Canary" app that coexists with your stable install. Expect breakage.
 
 Each release publishes installers for Linux, macOS (Apple Silicon + Intel), and Windows, plus a `checksums.txt` with SHA-256 hashes.
 

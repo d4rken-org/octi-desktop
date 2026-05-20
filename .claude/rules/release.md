@@ -24,7 +24,7 @@ release-prepare.yml (workflow_dispatch)
 ```
 
 The per-OS jpackage matrix lives in the reusable `build-installers.yml` (`on: workflow_call`)
-so the same matrix is reused unchanged by `release-nightly.yml`. Each per-OS build runs a
+so the same matrix is reused unchanged by `release-canary.yml`. Each per-OS build runs a
 `--version` smoke step against the built binary before uploading — proves the bundled JRE +
 jlink modules + native libs load cleanly. CI fails loud if the artifact won't launch.
 
@@ -44,12 +44,12 @@ before feeding to jpackage:
 ```kotlin
 val rawVersion = project.version.toString()
 val numericVersion: String = rawVersion.replace(
-    Regex("-(rc\\d+|beta\\d+|dev\\d*|nightly\\.[0-9a-zA-Z]+)$"),
+    Regex("-(rc\\d+|beta\\d+|dev\\d*|canary\\.[0-9a-zA-Z]+)$"),
     "",
 )
 ```
 
-This means `1.0.0-beta1`, `1.0.0-rc1`, `1.0.0-nightly.abc12345`, and `1.0.0` all produce
+This means `1.0.0-beta1`, `1.0.0-rc1`, `1.0.0-canary.abc12345`, and `1.0.0` all produce
 `packageVersion=1.0.0`. The filename carries the full version (`Octi-1.0.0-beta1.dmg`) so
 GitHub Releases stays unambiguous, but the OS-level package version inside the installer
 is the same `1.0.0`.
@@ -57,9 +57,9 @@ is the same `1.0.0`.
 Consequence: switching between prereleases of the same X.Y.Z (e.g. beta1 → rc1) requires
 uninstall + reinstall on Windows MSI. Stable → stable upgrades work normally.
 
-Nightly avoids this problem entirely by using a different `upgradeUuid` / `packageName` /
-`bundleID` per channel — nightly installs as a distinct "Octi Nightly" product, not as an
-upgrade over stable. See the Nightly section below.
+Canary avoids this problem entirely by using a different `upgradeUuid` / `packageName` /
+`bundleID` per channel — canary installs as a distinct "Octi Canary" product, not as an
+upgrade over stable. See the Canary section below.
 
 ## macOS MAJOR > 0 requirement
 
@@ -126,59 +126,63 @@ Subsequent releases auto-populate from PR titles.
 3. Revert the bump commit on `main`: `git revert <sha>` + push.
 4. Re-cut from the correct state via `release-prepare.yml`.
 
-## Nightly (rolling) builds
+## Canary (rolling) builds
 
-`release-nightly.yml` publishes a `nightly` pre-release on every push to `main` (and on
+`release-canary.yml` publishes a `canary` pre-release on every push to `main` (and on
 manual workflow dispatch). Same per-OS matrix as `release-tag.yml` — both call the reusable
-`build-installers.yml` — with `version=0.X.Y-nightly.{shortsha8}` injected via `-Pversion=`
-and `channel=nightly` passed via `-Pchannel=`.
+`build-installers.yml` — with `version=0.X.Y-canary.{shortsha8}` injected via `-Pversion=`
+and `channel=canary` passed via `-Pchannel=`.
 
-**Channel = separate product.** Nightly's `build.gradle.kts` `-Pchannel=nightly` switch
-gives nightly a different `packageName`, `bundleID`, `upgradeUuid`, and menu group from
-stable. Result: a user with stable installed sees "Octi Nightly" as a distinct app — not as
+The label "canary" follows Chrome / Android Studio's convention for per-merge bleeding-edge
+builds. It is **not** a nightly cron — the workflow only runs when `main` advances (or on
+manual dispatch).
+
+**Channel = separate product.** Canary's `build.gradle.kts` `-Pchannel=canary` switch
+gives canary a different `packageName`, `bundleID`, `upgradeUuid`, and menu group from
+stable. Result: a user with stable installed sees "Octi Canary" as a distinct app — not as
 an upgrade. Both can coexist. Solves the otherwise unsolvable problem of jpackage's
-"every nightly has the same X.Y.Z `packageVersion`, so MSI/dpkg/rpm refuses to upgrade".
+"every canary has the same X.Y.Z `packageVersion`, so MSI/dpkg/rpm refuses to upgrade".
 
 ```
 push to main / workflow_dispatch
-  └─► release-nightly.yml
-        └─ compute-version              derives 0.X.Y-nightly.{shortsha8} from gradle.properties + HEAD
-        └─ build (calls build-installers.yml, channel=nightly)
-              └─ build-linux            ubuntu-22.04 → octi-nightly_*.deb + .rpm + Octi-nightly.AppImage + .tar.gz
-              └─ build-macos-arm        macos-14    → Octi-nightly-macos-arm64.dmg
-              └─ build-macos-intel      macos-15-intel → Octi-nightly-macos-x64.dmg
-              └─ build-windows          windows-2022 → Octi-nightly.msi
-        └─ publish-nightly              mint App token, stale-SHA guard, force-move `nightly` tag,
+  └─► release-canary.yml
+        └─ compute-version              derives 0.X.Y-canary.{shortsha8} from gradle.properties + HEAD
+        └─ build (calls build-installers.yml, channel=canary)
+              └─ build-linux            ubuntu-22.04 → octi-canary_*.deb + .rpm + Octi-canary.AppImage + .tar.gz
+              └─ build-macos-arm        macos-14    → Octi-canary-macos-arm64.dmg
+              └─ build-macos-intel      macos-15-intel → Octi-canary-macos-x64.dmg
+              └─ build-windows          windows-2022 → Octi-canary.msi
+        └─ publish-canary               mint App token, stale-SHA guard, force-move `canary` tag,
                                         two-step upload (installers first, checksums + body last)
 ```
 
 ### Concurrency design
 
-Workflow-level concurrency would cancel `publish-nightly` mid-upload along with the rest of
+Workflow-level concurrency would cancel `publish-canary` mid-upload along with the rest of
 the workflow. Instead, each job sets its own concurrency group:
 
 | Group | Jobs | `cancel-in-progress` |
 |---|---|---|
-| `release-nightly-build-${repo}` | compute-version, build | true — newer pushes supersede in-flight builds |
-| `release-nightly-publish-${repo}` | publish-nightly | false — publish never cancelled mid-upload |
+| `release-canary-build-${repo}` | compute-version, build | true — newer pushes supersede in-flight builds |
+| `release-canary-publish-${repo}` | publish-canary | false — publish never cancelled mid-upload |
 
-A **stale-SHA guard** inside publish-nightly aborts the run when main has moved past the
+A **stale-SHA guard** inside publish-canary aborts the run when main has moved past the
 build's source commit. Prevents a slow stale build from clobbering a newer one.
 
 ### Asset names + URLs
 
 Fixed per-OS — overwritten on every publish. The stable URLs that the README links to:
 
-- `Octi-nightly-linux-x86_64.AppImage`
-- `Octi-nightly-linux.tar.gz`
-- `Octi-nightly-macos-arm64.dmg`
-- `Octi-nightly-macos-x64.dmg`
-- `Octi-nightly.msi`
-- `octi-nightly_*.deb` / `octi-nightly-*.rpm` (filename carries jpackage's `X.Y.Z` from `packageName=octi-nightly`)
+- `Octi-canary-linux-x86_64.AppImage`
+- `Octi-canary-linux.tar.gz`
+- `Octi-canary-macos-arm64.dmg`
+- `Octi-canary-macos-x64.dmg`
+- `Octi-canary.msi`
+- `octi-canary_*.deb` / `octi-canary-*.rpm` (filename carries jpackage's `X.Y.Z` from `packageName=octi-canary`)
 
 ### Manual run
 
-Actions → **Rolling nightly build** → **Run workflow** on `main`. Use when:
+Actions → **Rolling canary build** → **Run workflow** on `main`. Use when:
 - The previous run cancelled mid-build due to concurrent push and nothing has happened since.
 - You want to rebuild without committing a no-op.
 
@@ -186,11 +190,11 @@ The workflow refuses to run on any branch other than `main`.
 
 ### Rollback
 
-If a broken commit landed and nightly is publishing it:
+If a broken commit landed and canary is publishing it:
 
 ```
-gh release delete nightly --cleanup-tag
-git push origin --delete nightly   # if --cleanup-tag didn't remove the tag
+gh release delete canary --cleanup-tag
+git push origin --delete canary   # if --cleanup-tag didn't remove the tag
 ```
 
 The next push (or manual dispatch) recreates the release cleanly. Stable releases are
@@ -198,11 +202,11 @@ unaffected.
 
 ### One-time setup beyond the stable App-token prereqs above
 
-- Ensure any tag protection ruleset covering the `nightly` tag lists the `d4rken-org-releaser`
-  App as a bypass actor. If the ruleset is `v*`-scoped only, `nightly` is unaffected.
+- Ensure any tag protection ruleset covering the `canary` tag lists the `d4rken-org-releaser`
+  App as a bypass actor. If the ruleset is `v*`-scoped only, `canary` is unaffected.
 
 ## Signing — still deferred
 
-All artifacts are **unsigned** — stable AND nightly. macOS Gatekeeper + Windows SmartScreen
+All artifacts are **unsigned** — stable AND canary. macOS Gatekeeper + Windows SmartScreen
 will warn on first launch. The README documents the bypass. Notarization is its own project
 (Apple Developer membership + Windows Authenticode cert + secret wiring).

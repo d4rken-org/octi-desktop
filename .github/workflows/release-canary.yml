@@ -1,12 +1,13 @@
-name: Rolling nightly build
+name: Rolling canary build
 
 # Builds installers for every OS target from the current main commit and publishes them to a
-# permanent `nightly` pre-release. Updated on every push to main; can also be dispatched
+# permanent `canary` pre-release. Updated on every push to main; can also be dispatched
 # manually if a rebuild from current main is needed without a no-op commit.
 #
-# Nightly installs as a distinct product on the user's machine (different packageName /
-# bundleID / upgradeUuid — see build.gradle.kts' channel switch). Stable + nightly coexist
-# rather than one upgrading over the other.
+# The label "canary" follows Chrome / Android Studio's convention for per-merge bleeding-edge
+# builds — not a literal nightly cron. The desktop installs as a distinct product on the
+# user's machine (different packageName / bundleID / upgradeUuid — see build.gradle.kts'
+# channel switch). Stable + canary coexist rather than one upgrading over the other.
 
 on:
   push:
@@ -19,17 +20,17 @@ permissions:
 # No workflow-level concurrency on purpose: workflow-level `cancel-in-progress: true` would
 # also cancel the publish job mid-upload, which is exactly the failure mode we're trying to
 # avoid. Each job below sets its own concurrency group:
-#   release-nightly-build-${repo}    cancellable — newer pushes supersede in-flight builds
-#   release-nightly-publish-${repo}  serialized but never cancelled — publish runs to completion
-# A stale-SHA guard inside publish-nightly aborts cleanly when main has moved past us during
+#   release-canary-build-${repo}    cancellable — newer pushes supersede in-flight builds
+#   release-canary-publish-${repo}  serialized but never cancelled — publish runs to completion
+# A stale-SHA guard inside publish-canary aborts cleanly when main has moved past us during
 # the build window, so a publish from an outdated commit can't clobber a fresher one.
 
 jobs:
   compute-version:
-    name: Compute nightly version
+    name: Compute canary version
     runs-on: ubuntu-24.04
     concurrency:
-      group: release-nightly-build-${{ github.repository }}
+      group: release-canary-build-${{ github.repository }}
       cancel-in-progress: true
     outputs:
       version_override: ${{ steps.derive.outputs.version_override }}
@@ -41,7 +42,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$REF" != "refs/heads/main" ]]; then
-            echo "::error::nightly must run on main (got '$REF')"
+            echo "::error::canary must run on main (got '$REF')"
             exit 1
           fi
 
@@ -51,35 +52,35 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Derive nightly version
+      - name: Derive canary version
         id: derive
         run: |
           set -euo pipefail
           base=$(awk -F= '$1=="version"{print $2}' gradle.properties)
           # Strip any existing prerelease suffix from the gradle.properties base. We want the
-          # X.Y.Z numeric core; -nightly is appended below using the short SHA.
-          base_numeric=$(echo "$base" | sed -E 's/-(rc[0-9]+|beta[0-9]+|dev[0-9]*|nightly\.[0-9A-Za-z]+)$//')
+          # X.Y.Z numeric core; -canary is appended below using the short SHA.
+          base_numeric=$(echo "$base" | sed -E 's/-(rc[0-9]+|beta[0-9]+|dev[0-9]*|canary\.[0-9A-Za-z]+)$//')
           short=$(git rev-parse --short=8 HEAD)
-          echo "version_override=${base_numeric}-nightly.${short}" >> "$GITHUB_OUTPUT"
+          echo "version_override=${base_numeric}-canary.${short}" >> "$GITHUB_OUTPUT"
           echo "short_sha=${short}" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build installers
     needs: [compute-version]
     concurrency:
-      group: release-nightly-build-${{ github.repository }}
+      group: release-canary-build-${{ github.repository }}
       cancel-in-progress: true
     uses: ./.github/workflows/build-installers.yml
     with:
-      channel: nightly
+      channel: canary
       version-override: ${{ needs.compute-version.outputs.version_override }}
-      artifact-prefix: Octi-nightly
-      # Workflow artifacts are an intermediate hop to publish-nightly. Once the release is up,
+      artifact-prefix: Octi-canary
+      # Workflow artifacts are an intermediate hop to publish-canary. Once the release is up,
       # they're redundant with the release assets. 7 days is plenty of debugging window.
       artifact-retention-days: 7
 
-  publish-nightly:
-    name: Publish nightly release
+  publish-canary:
+    name: Publish canary release
     needs: [compute-version, build]
     runs-on: ubuntu-24.04
     permissions:
@@ -88,10 +89,10 @@ jobs:
       # Separate group from build so a fresh build cancelling an older build doesn't take this
       # job down mid-upload. cancel-in-progress: false → if a publish is already running, new
       # publishes queue behind it rather than overwriting in-flight asset uploads.
-      group: release-nightly-publish-${{ github.repository }}
+      group: release-canary-publish-${{ github.repository }}
       cancel-in-progress: false
     steps:
-      - name: Mint App token (needs to push the nightly tag)
+      - name: Mint App token (needs to push the canary tag)
         # GITHUB_TOKEN cannot bypass tag protection rulesets, and persist-credentials: false on
         # checkout precludes default-token pushes anyway. The d4rken-org-releaser App has the
         # same bypass-actor scope used by release-prepare.yml.
@@ -122,7 +123,7 @@ jobs:
 
       - name: Stale-SHA guard
         # If main moved past us during the build window, abort. A newer workflow run is on the
-        # way and we shouldn't move the `nightly` tag backwards to our older commit.
+        # way and we shouldn't move the `canary` tag backwards to our older commit.
         env:
           EXPECTED_SHA: ${{ github.sha }}
         run: |
@@ -144,16 +145,16 @@ jobs:
           mkdir -p release
           find artifacts -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.tar.gz' -o -name '*.dmg' -o -name '*.msi' \) -exec cp {} release/ \;
           # Assert the full expected set landed — fail loud if any OS build silently produced
-          # nothing. Nightly's fixed asset names make the matrix here easy to enumerate.
+          # nothing. Canary's fixed asset names make the matrix here easy to enumerate.
           required=(
-            Octi-nightly-linux-x86_64.AppImage
-            Octi-nightly-linux.tar.gz
-            Octi-nightly-macos-arm64.dmg
-            Octi-nightly-macos-x64.dmg
-            Octi-nightly.msi
+            Octi-canary-linux-x86_64.AppImage
+            Octi-canary-linux.tar.gz
+            Octi-canary-macos-arm64.dmg
+            Octi-canary-macos-x64.dmg
+            Octi-canary.msi
           )
-          # .deb / .rpm names come from jpackage's convention based on packageName=octi-nightly,
-          # so they look like 'octi-nightly_X.Y.Z_amd64.deb' / 'octi-nightly-X.Y.Z.x86_64.rpm'.
+          # .deb / .rpm names come from jpackage's convention based on packageName=octi-canary,
+          # so they look like 'octi-canary_X.Y.Z_amd64.deb' / 'octi-canary-X.Y.Z.x86_64.rpm'.
           # Rather than guessing exact filenames, just assert at least one of each is present.
           for f in "${required[@]}"; do
             [[ -f "release/$f" ]] || { echo "::error::missing release/$f"; exit 1; }
@@ -178,9 +179,11 @@ jobs:
           last_tag=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo "(none)")
           built_at=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
           {
-            echo "## Octi Desktop — Rolling nightly build"
+            echo "## Octi Desktop — Canary (bleeding-edge build)"
             echo ""
-            echo "**Bleeding edge — stability not guaranteed.** Use the [latest stable release](https://github.com/${REPO}/releases/latest) unless you specifically want this build. Nightly installs as a separate \"Octi Nightly\" app — it does NOT replace your stable install."
+            echo "**Bleeding edge — rebuilt from the tip of \`main\` on every merge. Expect breakage; use the [latest stable release](https://github.com/${REPO}/releases/latest) for day-to-day use.**"
+            echo ""
+            echo "Canary installs as a distinct \"Octi Canary\" app — it does NOT replace your stable install. The label follows Chrome / Android Studio's convention for per-merge unstable builds; this is not a nightly cron, it rebuilds whenever \`main\` advances."
             echo ""
             echo "- **Version**: \`${VERSION}\`"
             echo "- **Commit**: [\`${SHORT_SHA}\`](https://github.com/${REPO}/commit/${SHA})"
@@ -204,13 +207,13 @@ jobs:
           git config user.name "$GIT_USER_NAME"
           git config user.email "$GIT_USER_EMAIL"
 
-      - name: Move nightly tag to HEAD
+      - name: Move canary tag to HEAD
         # softprops/action-gh-release doesn't move existing tags — only creates new ones. Move
-        # the `nightly` tag explicitly here so it always points at the latest published build.
+        # the `canary` tag explicitly here so it always points at the latest published build.
         run: |
           set -euo pipefail
-          git tag -f nightly
-          git push origin nightly --force
+          git tag -f canary
+          git push origin canary --force
 
       - name: Upload installers
         # First softprops call uploads the installer assets. Body + checksums.txt come in a
@@ -218,26 +221,26 @@ jobs:
         # set of files (new installers, stale checksums).
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda #v3.0.0
         with:
-          tag_name: nightly
-          name: "Nightly (${{ needs.compute-version.outputs.version_override }})"
+          tag_name: canary
+          name: "Canary (${{ needs.compute-version.outputs.version_override }})"
           prerelease: true
           make_latest: false
           files: |
-            release/Octi-nightly-linux-x86_64.AppImage
-            release/Octi-nightly-linux.tar.gz
-            release/Octi-nightly-macos-arm64.dmg
-            release/Octi-nightly-macos-x64.dmg
-            release/Octi-nightly.msi
-            release/octi-nightly_*.deb
-            release/octi-nightly-*.rpm
+            release/Octi-canary-linux-x86_64.AppImage
+            release/Octi-canary-linux.tar.gz
+            release/Octi-canary-macos-arm64.dmg
+            release/Octi-canary-macos-x64.dmg
+            release/Octi-canary.msi
+            release/octi-canary_*.deb
+            release/octi-canary-*.rpm
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 
       - name: Upload checksums + finalize body
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda #v3.0.0
         with:
-          tag_name: nightly
-          name: "Nightly (${{ needs.compute-version.outputs.version_override }})"
+          tag_name: canary
+          name: "Canary (${{ needs.compute-version.outputs.version_override }})"
           prerelease: true
           make_latest: false
           body_path: release-body.md
