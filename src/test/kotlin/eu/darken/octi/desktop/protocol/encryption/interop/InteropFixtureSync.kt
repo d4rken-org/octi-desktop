@@ -28,14 +28,11 @@ internal object InteropFixtureSync {
     private const val FETCH_TIMEOUT_MS = 15_000L
     private const val FETCH_RETRIES = 1
 
-    private const val EXPECTED_SOURCE = "d4rken-org/octi"
-
     // Filenames: ASCII subset, must end in `.json`, no leading dot, no dot segments, no `..`.
     private val FIXTURE_FILE_RE = Regex(
         """^(?:[A-Za-z0-9_-][A-Za-z0-9_.-]*/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*\.json$""",
     )
     private val RESERVED_FILENAMES = setOf(".sha", "manifest.json")
-    private val SHA40_RE = Regex("""^[a-f0-9]{40}$""")
     private val SHA256_RE = Regex("""^[a-f0-9]{64}$""")
 
     @Volatile private var cacheDirCached: Path? = null
@@ -63,48 +60,63 @@ internal object InteropFixtureSync {
         }
         val lockBytes = Files.readAllBytes(lockPath)
         val lock = parseLock(lockBytes)
+        val resolved = SyncRefResolver.resolveFromEnv(lock)
+        if (resolved.manifestSha256 == null) {
+            println("using override for ${resolved.source}: ${resolved.ref}")
+        }
 
-        val cacheDir = repoRoot.resolve(".cache").resolve("interop-fixtures").resolve(lock.ref)
-        if (cacheIsValid(cacheDir, lock)) {
-            println("interop fixtures cache hit: ${lock.source}@${lock.ref}")
+        val cacheDir = repoRoot.resolve(".cache").resolve("interop-fixtures").resolve(resolved.ref)
+        // Under override (no committed manifest sha to pin against), always re-fetch the
+        // manifest. The cache may still have valid bytes, but the manifest must come from the
+        // live upstream so it can't be a poisoned local copy.
+        if (resolved.manifestSha256 != null && cacheIsValid(cacheDir, resolved)) {
+            println("interop fixtures cache hit: ${resolved.source}@${resolved.ref}")
             return cacheDir
         }
 
-        println("fetching interop fixtures from ${lock.source}@${lock.ref}...")
+        println("fetching interop fixtures from ${resolved.source}@${resolved.ref}...")
         Files.createDirectories(cacheDir)
 
-        val manifestBytes = fetchBytes("${rawBaseUrl(lock)}/manifest.json")
-        val manifest = parseAndValidateManifest(manifestBytes, lock)
+        val manifestBytes = fetchBytes("${rawBaseUrl(resolved)}/manifest.json")
+        val manifest = parseAndValidateManifest(manifestBytes, resolved)
         Files.write(cacheDir.resolve("manifest.json"), manifestBytes)
 
         for ((name, entry) in manifest.files) {
-            val bytes = fetchBytes("${rawBaseUrl(lock)}/$name")
+            val dest = cacheDir.resolve(name)
+            // Under override, cached files for this ref may already be valid; skip
+            // re-download in that case to spare bandwidth for unchanged blobs.
+            if (Files.isRegularFile(dest) && sha256Hex(Files.readAllBytes(dest)) == entry.sha256) {
+                println("  $name (cached, sha256 ok)")
+                continue
+            }
+            val bytes = fetchBytes("${rawBaseUrl(resolved)}/$name")
             val actual = sha256Hex(bytes)
             check(actual == entry.sha256) {
                 "$name sha256 mismatch — expected ${entry.sha256}, got $actual"
             }
-            val dest = cacheDir.resolve(name)
             Files.createDirectories(dest.parent)
             Files.write(dest, bytes)
             println("  $name (${bytes.size} bytes, sha256 ok)")
         }
 
         // Marker written last so an interrupted run never produces a "valid" cache.
-        Files.writeString(cacheDir.resolve(".sha"), lock.ref)
+        Files.writeString(cacheDir.resolve(".sha"), resolved.ref)
         println("interop fixtures synced: $cacheDir")
         return cacheDir
     }
 
     /**
-     * Single source of truth for validating fixture bytes against the lockfile. Used both
-     * on cold-fetch and warm-cache paths so a stale cache cannot pass weaker checks than a
-     * fresh download.
+     * Single source of truth for validating fixture bytes against the lockfile (or, under
+     * override, against the manifest's self-claimed shape only). Used both on cold-fetch and
+     * warm-cache paths so a stale cache cannot pass weaker checks than a fresh download.
      */
-    private fun parseAndValidateManifest(bytes: ByteArray, lock: FixtureLock): FixtureManifest {
-        val actualSha = sha256Hex(bytes)
-        check(actualSha == lock.manifestSha256) {
-            "manifest sha256 mismatch — expected ${lock.manifestSha256}, got $actualSha. " +
-                "Either fixture-lock.json is stale or upstream history was rewritten."
+    private fun parseAndValidateManifest(bytes: ByteArray, resolved: ResolvedSource): FixtureManifest {
+        if (resolved.manifestSha256 != null) {
+            val actualSha = sha256Hex(bytes)
+            check(actualSha == resolved.manifestSha256) {
+                "manifest sha256 mismatch — expected ${resolved.manifestSha256}, got $actualSha. " +
+                    "Either fixture-lock.json is stale or upstream history was rewritten."
+            }
         }
         val manifest = try {
             InteropFixtures.json.decodeFromString(FixtureManifest.serializer(), bytes.decodeToString())
@@ -114,8 +126,8 @@ internal object InteropFixtureSync {
         check(manifest.schemaVersion == InteropFixtures.SCHEMA_VERSION) {
             "unsupported manifest schemaVersion ${manifest.schemaVersion}; this client knows v${InteropFixtures.SCHEMA_VERSION}"
         }
-        check(manifest.source == lock.source) {
-            "manifest source ${manifest.source} disagrees with lockfile source ${lock.source}"
+        check(manifest.source == resolved.source) {
+            "manifest source ${manifest.source} disagrees with resolved source ${resolved.source}"
         }
         for ((name, entry) in manifest.files) {
             check(FIXTURE_FILE_RE.matches(name)) { "manifest contains invalid file name: $name" }
@@ -134,32 +146,21 @@ internal object InteropFixtureSync {
         } catch (e: Exception) {
             error("fixture-lock.json failed to parse: ${e.message}")
         }
-        // Pinned exactly. The regex-only check was too permissive — there is no scenario
-        // where this repo's fixture-lock should ever point at anything other than
-        // d4rken-org/octi, and a typo there silently exercises the wrong contract.
-        check(lock.source == EXPECTED_SOURCE) {
-            "fixture-lock.json source must be \"$EXPECTED_SOURCE\", got: ${lock.source}"
-        }
-        check(SHA40_RE.matches(lock.ref)) {
-            "fixture-lock.json ref must be a 40-character commit SHA (no tags or branches), got: ${lock.ref}"
-        }
-        check(SHA256_RE.matches(lock.manifestSha256)) {
-            "fixture-lock.json manifest_sha256 must be 64 lowercase hex chars"
-        }
+        SyncRefResolver.validateLock(lock)
         return lock
     }
 
-    private fun cacheIsValid(cacheDir: Path, lock: FixtureLock): Boolean {
+    private fun cacheIsValid(cacheDir: Path, resolved: ResolvedSource): Boolean {
         val markerPath = cacheDir.resolve(".sha")
         if (!Files.isRegularFile(markerPath)) return false
-        if (Files.readString(markerPath).trim() != lock.ref) return false
+        if (Files.readString(markerPath).trim() != resolved.ref) return false
 
         val manifestPath = cacheDir.resolve("manifest.json")
         if (!Files.isRegularFile(manifestPath)) return false
         val manifestBytes = Files.readAllBytes(manifestPath)
 
         val manifest = try {
-            parseAndValidateManifest(manifestBytes, lock)
+            parseAndValidateManifest(manifestBytes, resolved)
         } catch (_: IllegalStateException) {
             return false
         }
@@ -172,8 +173,11 @@ internal object InteropFixtureSync {
         return true
     }
 
-    private fun rawBaseUrl(lock: FixtureLock): String =
-        "https://raw.githubusercontent.com/${lock.source}/${lock.ref}/sync-core/src/test/resources/interop"
+    private fun rawBaseUrl(resolved: ResolvedSource): String {
+        val path = SyncRefResolver.SOURCE_PATHS[resolved.source]
+            ?: error("source \"${resolved.source}\" not in SOURCE_PATHS")
+        return "https://raw.githubusercontent.com/${resolved.source}/${resolved.ref}/$path"
+    }
 
     private fun fetchBytes(url: String): ByteArray {
         val client = HttpClient.newBuilder()

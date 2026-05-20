@@ -21,6 +21,9 @@ import java.util.zip.GZIPInputStream
  *
  * Fails if:
  *   - The manifest sha256 disagrees with the lockfile (cache poisoning / upstream rewrite).
+ *     **Skipped under `INTEROP_FIXTURE_OVERRIDES`** — no committed sha can pin an arbitrary
+ *     upstream commit; per-file sha256s in the freshly-fetched manifest stay as the trust
+ *     anchor. See [SyncRefResolver.resolveFromEnv].
  *   - Any committed ciphertext fails to decrypt under the committed keyset + AAD.
  *   - A vector's decoded sizes drift from the declared `plaintextSize` / `ciphertextSize`.
  *   - The Tink AEAD wire prefix is wrong.
@@ -43,10 +46,11 @@ class InteropFixtureVerifyTest {
 
     @Test
     fun `manifest sha256 matches every committed fixture file`() {
-        // InteropFixtureSync.ensureSynced already validates the manifest's sha against the
-        // lockfile and every file's sha against the manifest; re-running the check here would
-        // be redundant. Instead pin the visible state: cache directory exists, has both
-        // fixture files, and the manifest itself is parseable + at the expected schemaVersion.
+        // InteropFixtureSync.ensureSynced already validates the manifest (against the lockfile
+        // sha, or — under INTEROP_FIXTURE_OVERRIDES — against itself) and every file's sha
+        // against the manifest; re-running the check here would be redundant. Instead pin the
+        // visible state: cache directory exists, has both fixture files, and the manifest
+        // itself is parseable + at the expected schemaVersion.
         Files.isRegularFile(cacheDir.resolve(InteropFixtures.MANIFEST_FILE)) shouldBe true
         Files.isRegularFile(cacheDir.resolve(InteropFixtures.TINK_FILE)) shouldBe true
         Files.isRegularFile(cacheDir.resolve(InteropFixtures.STREAMING_FILE)) shouldBe true
