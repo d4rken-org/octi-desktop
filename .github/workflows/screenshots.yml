@@ -146,15 +146,23 @@ jobs:
           ./gradlew --no-daemon bootstrapScreenshotPeer \
             --args="--server $SYNC_SERVER_URL --label Pixel --output $LINK_FILE"
 
+      - name: Build runnable distributable
+        run: |
+          set -euo pipefail
+          # Build once so the next step can launch the binary directly. Going through
+          # `./gradlew run` worked but Gradle's logger ate the JVM's stdout — the
+          # DEBUG_RPC banner with the auth token never reached $APP_LOG and the capture
+          # script timed out grepping for it.
+          ./gradlew --no-daemon createDistributable
+
       - name: Launch desktop app
         run: |
           set -euo pipefail
-          # `./gradlew run` spins a daemon and inherits stdio. We want the JVM detached so this
-          # step can return; redirect both streams into APP_LOG and capture the process group so
-          # the cleanup step can take it down.
           mkdir -p "$(dirname "$APP_LOG")"
-          nohup ./gradlew --no-daemon run \
-            --args="--enable-debug-rpc --debug-rpc-port $RPC_PORT" \
+          # Run the launcher script directly; its stdout/stderr go straight to our redirect
+          # without Gradle's logger in the middle.
+          nohup ./build/compose/binaries/main/app/Octi/bin/Octi \
+            --enable-debug-rpc --debug-rpc-port "$RPC_PORT" \
             >"$APP_LOG" 2>&1 &
           echo $! > build/screenshots/app.pid
 
