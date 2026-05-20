@@ -201,6 +201,19 @@ class AppGraph private constructor(
             settings.update { it.copy(themeMode = mode) }
             buildJsonObject { put("mode", JsonPrimitive(mode.name)) }
         }
+
+        debugActions.registerUiAction(
+            DebugActionRegistry.Metadata(
+                name = "settings.deviceLabel",
+                description = "Override the desktop's device label. Used by the screenshot workflow so the dashboard tile reads a polished name (e.g. \"MacBook Pro\") instead of the runner's hostname. Pass an empty string to clear the override and fall back to the hostname.",
+                params = mapOf("label" to "string — new label, or empty to clear"),
+                example = """{"label":"MacBook Pro"}""",
+            ),
+        ) { params ->
+            val label = params["label"]?.jsonPrimitive?.content ?: error("missing label")
+            settings.update { it.copy(deviceLabel = label.ifBlank { null }) }
+            buildJsonObject { put("label", JsonPrimitive(label)) }
+        }
     }
 
     /**
