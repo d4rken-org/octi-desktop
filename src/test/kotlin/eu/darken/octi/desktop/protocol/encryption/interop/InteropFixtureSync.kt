@@ -8,25 +8,40 @@ import java.net.http.HttpResponse
 import java.net.http.HttpTimeoutException
 import java.nio.file.Files
 import java.nio.file.Path
-import java.security.MessageDigest
 import java.time.Duration
 
 /**
- * Fetch + verify d4rken-org/octi's interop fixtures at the SHA pinned in `fixture-lock.json`.
- * Idempotent — repeated invocations with a populated cache skip the network entirely.
+ * Fetch + verify the multi-source interop fixtures pinned in `fixture-lock.json`. Idempotent —
+ * repeated invocations with a populated cache skip the network entirely.
  *
- * Called from [InteropFixtureVerifyTest]'s `@BeforeAll`; designed so multiple test classes
- * (current or future) can invoke [ensureSynced] safely without ever re-downloading.
+ * Called from each consumer test's `@BeforeAll`. Object-level singleton with double-checked
+ * locking so multiple test classes (the always-on crypto gate + the per-module web consumers)
+ * only sync once per JVM, regardless of test execution order or parallelism.
  *
- * Why this pattern instead of a Gradle task:
- *  - Same lifecycle for `./gradlew test` and IDE-direct test runs — no separate plumbing.
- *  - Failures surface as test failures with the same diagnostic surface area.
- *  - The cache check + sha256 verify is the same trust boundary either way.
+ * Cache layout: `.cache/interop-fixtures/<owner>/<repo>/<sha>/` — owner+repo in the path
+ * prevents collisions across sources.
  */
 internal object InteropFixtureSync {
 
     private const val FETCH_TIMEOUT_MS = 15_000L
     private const val FETCH_RETRIES = 1
+
+    /** Manifest size cap. 64 KiB is far above the realistic ceiling (~1 KiB today). */
+    private const val MAX_MANIFEST_BYTES = 64 * 1024
+
+    /**
+     * Per-file size cap. 2 MiB covers app-main's largest committed `streaming-vectors.json`
+     * (~1.4 MiB — the two-segment streaming AEAD vector). Web's per-module fixtures are all
+     * <10 KiB so the cap is unconstrained there. If a future producer fixture file approaches
+     * this number it's worth questioning whether the vector needs to be that large.
+     */
+    private const val MAX_FIXTURE_BYTES = 2 * 1024 * 1024
+
+    /** Cap on file count to bound iteration on a hostile manifest. */
+    private const val MAX_MANIFEST_FILES = 32
+
+    /** Lockfile size cap. User-owned but bound it anyway to catch hand-edit mistakes. */
+    private const val MAX_LOCKFILE_BYTES = 16 * 1024
 
     // Filenames: ASCII subset, must end in `.json`, no leading dot, no dot segments, no `..`.
     private val FIXTURE_FILE_RE = Regex(
@@ -35,40 +50,66 @@ internal object InteropFixtureSync {
     private val RESERVED_FILENAMES = setOf(".sha", "manifest.json")
     private val SHA256_RE = Regex("""^[a-f0-9]{64}$""")
 
-    @Volatile private var cacheDirCached: Path? = null
+    @Volatile private var cacheDirsCached: Map<String, Path>? = null
 
     /**
-     * Returns the resolved cache directory for the locked SHA, populating it from upstream if
-     * needed. Safe to call from multiple test classes — only the first call does work.
+     * Populate (or reuse) the cache for every source in the lockfile. Returns a map
+     * `source -> cache directory`. Safe to call from multiple test classes — only the first
+     * call does work.
      */
-    fun ensureSynced(): Path {
-        cacheDirCached?.let { return it }
+    fun ensureSynced(): Map<String, Path> {
+        cacheDirsCached?.let { return it }
         synchronized(this) {
-            cacheDirCached?.let { return it }
-            val dir = runSync()
-            cacheDirCached = dir
-            return dir
+            cacheDirsCached?.let { return it }
+            val dirs = runSync()
+            cacheDirsCached = dirs
+            return dirs
         }
     }
 
-    private fun runSync(): Path {
+    /** Convenience overload — return the cache dir for one specific source. */
+    fun ensureSynced(source: String): Path {
+        val dirs = ensureSynced()
+        return dirs[source] ?: error(
+            "source '$source' not present in fixture-lock.json (known: ${dirs.keys.joinToString(", ")})",
+        )
+    }
+
+    private fun runSync(): Map<String, Path> {
         val repoRoot = resolveRepoRoot()
         val lockPath = repoRoot.resolve("fixture-lock.json")
         check(Files.isRegularFile(lockPath)) {
             "fixture-lock.json not found at $lockPath. Run via `./gradlew test` (which sets " +
                 "`interopRepoRoot`) or set `-DinteropRepoRoot=<path>` on the test JVM."
         }
-        val lockBytes = Files.readAllBytes(lockPath)
-        val lock = parseLock(lockBytes)
-        val resolved = SyncRefResolver.resolveFromEnv(lock)
-        if (resolved.manifestSha256 == null) {
-            println("using override for ${resolved.source}: ${resolved.ref}")
+        check(Files.size(lockPath) <= MAX_LOCKFILE_BYTES) {
+            "fixture-lock.json is unexpectedly large (${Files.size(lockPath)} bytes); cap is $MAX_LOCKFILE_BYTES"
+        }
+        val lock = SyncRefResolver.parseLockJson(Files.readAllBytes(lockPath))
+        SyncRefResolver.validateLock(lock)
+        val resolvedAll = SyncRefResolver.resolveAllFromEnv(lock)
+        for ((source, resolved) in resolvedAll) {
+            if (resolved.manifestSha256 == null) {
+                println("using override for $source: ${resolved.ref}")
+            }
         }
 
-        val cacheDir = repoRoot.resolve(".cache").resolve("interop-fixtures").resolve(resolved.ref)
+        val out = LinkedHashMap<String, Path>(resolvedAll.size)
+        for ((source, resolved) in resolvedAll) {
+            out[source] = syncOne(repoRoot, resolved)
+        }
+        return out
+    }
+
+    private fun syncOne(repoRoot: Path, resolved: ResolvedSource): Path {
+        val (owner, repo) = resolved.source.split("/", limit = 2)
+        val cacheDir = repoRoot
+            .resolve(".cache").resolve("interop-fixtures")
+            .resolve(owner).resolve(repo).resolve(resolved.ref)
+
         // Under override (no committed manifest sha to pin against), always re-fetch the
-        // manifest. The cache may still have valid bytes, but the manifest must come from the
-        // live upstream so it can't be a poisoned local copy.
+        // manifest. The cache may still have valid bytes, but the manifest must come from
+        // the live upstream so it can't be a poisoned local copy.
         if (resolved.manifestSha256 != null && cacheIsValid(cacheDir, resolved)) {
             println("interop fixtures cache hit: ${resolved.source}@${resolved.ref}")
             return cacheDir
@@ -77,20 +118,24 @@ internal object InteropFixtureSync {
         println("fetching interop fixtures from ${resolved.source}@${resolved.ref}...")
         Files.createDirectories(cacheDir)
 
-        val manifestBytes = fetchBytes("${rawBaseUrl(resolved)}/manifest.json")
+        val manifestBytes = fetchBytes("${rawBaseUrl(resolved)}/manifest.json", MAX_MANIFEST_BYTES)
         val manifest = parseAndValidateManifest(manifestBytes, resolved)
         Files.write(cacheDir.resolve("manifest.json"), manifestBytes)
 
         for ((name, entry) in manifest.files) {
             val dest = cacheDir.resolve(name)
             // Under override, cached files for this ref may already be valid; skip
-            // re-download in that case to spare bandwidth for unchanged blobs.
-            if (Files.isRegularFile(dest) && sha256Hex(Files.readAllBytes(dest)) == entry.sha256) {
+            // re-download to spare bandwidth on unchanged blobs. Cap size first so a tampered
+            // local cache file can't be slurped whole.
+            if (Files.isRegularFile(dest) &&
+                Files.size(dest) <= MAX_FIXTURE_BYTES &&
+                InteropFixtures.sha256Hex(Files.readAllBytes(dest)) == entry.sha256
+            ) {
                 println("  $name (cached, sha256 ok)")
                 continue
             }
-            val bytes = fetchBytes("${rawBaseUrl(resolved)}/$name")
-            val actual = sha256Hex(bytes)
+            val bytes = fetchBytes("${rawBaseUrl(resolved)}/$name", MAX_FIXTURE_BYTES)
+            val actual = InteropFixtures.sha256Hex(bytes)
             check(actual == entry.sha256) {
                 "$name sha256 mismatch — expected ${entry.sha256}, got $actual"
             }
@@ -112,9 +157,9 @@ internal object InteropFixtureSync {
      */
     private fun parseAndValidateManifest(bytes: ByteArray, resolved: ResolvedSource): FixtureManifest {
         if (resolved.manifestSha256 != null) {
-            val actualSha = sha256Hex(bytes)
+            val actualSha = InteropFixtures.sha256Hex(bytes)
             check(actualSha == resolved.manifestSha256) {
-                "manifest sha256 mismatch — expected ${resolved.manifestSha256}, got $actualSha. " +
+                "manifest sha256 mismatch for ${resolved.source} — expected ${resolved.manifestSha256}, got $actualSha. " +
                     "Either fixture-lock.json is stale or upstream history was rewritten."
             }
         }
@@ -129,6 +174,9 @@ internal object InteropFixtureSync {
         check(manifest.source == resolved.source) {
             "manifest source ${manifest.source} disagrees with resolved source ${resolved.source}"
         }
+        check(manifest.files.size <= MAX_MANIFEST_FILES) {
+            "manifest declares ${manifest.files.size} files; cap is $MAX_MANIFEST_FILES"
+        }
         for ((name, entry) in manifest.files) {
             check(FIXTURE_FILE_RE.matches(name)) { "manifest contains invalid file name: $name" }
             check(name.split("/").none { it == "." || it == ".." }) {
@@ -140,23 +188,15 @@ internal object InteropFixtureSync {
         return manifest
     }
 
-    private fun parseLock(bytes: ByteArray): FixtureLock {
-        val lock = try {
-            InteropFixtures.json.decodeFromString(FixtureLock.serializer(), bytes.decodeToString())
-        } catch (e: Exception) {
-            error("fixture-lock.json failed to parse: ${e.message}")
-        }
-        SyncRefResolver.validateLock(lock)
-        return lock
-    }
-
     private fun cacheIsValid(cacheDir: Path, resolved: ResolvedSource): Boolean {
         val markerPath = cacheDir.resolve(".sha")
         if (!Files.isRegularFile(markerPath)) return false
+        if (Files.size(markerPath) > 128) return false
         if (Files.readString(markerPath).trim() != resolved.ref) return false
 
         val manifestPath = cacheDir.resolve("manifest.json")
         if (!Files.isRegularFile(manifestPath)) return false
+        if (Files.size(manifestPath) > MAX_MANIFEST_BYTES) return false
         val manifestBytes = Files.readAllBytes(manifestPath)
 
         val manifest = try {
@@ -168,7 +208,8 @@ internal object InteropFixtureSync {
         for ((name, entry) in manifest.files) {
             val filePath = cacheDir.resolve(name)
             if (!Files.isRegularFile(filePath)) return false
-            if (sha256Hex(Files.readAllBytes(filePath)) != entry.sha256) return false
+            if (Files.size(filePath) > MAX_FIXTURE_BYTES) return false
+            if (InteropFixtures.sha256Hex(Files.readAllBytes(filePath)) != entry.sha256) return false
         }
         return true
     }
@@ -179,7 +220,7 @@ internal object InteropFixtureSync {
         return "https://raw.githubusercontent.com/${resolved.source}/${resolved.ref}/$path"
     }
 
-    private fun fetchBytes(url: String): ByteArray {
+    private fun fetchBytes(url: String, maxBytes: Int): ByteArray {
         val client = HttpClient.newBuilder()
             .connectTimeout(Duration.ofMillis(FETCH_TIMEOUT_MS))
             .followRedirects(HttpClient.Redirect.NORMAL)
@@ -192,20 +233,34 @@ internal object InteropFixtureSync {
         var lastError: Throwable? = null
         repeat(FETCH_RETRIES + 1) { attempt ->
             try {
-                val response = client.send(request, HttpResponse.BodyHandlers.ofByteArray())
+                // Stream the body and abort once the cap is exceeded, so a hostile or
+                // mis-pinned upstream can't burn arbitrary memory/network before we notice.
+                // ofByteArray() would buffer the whole response into memory first.
+                val response = client.send(request, HttpResponse.BodyHandlers.ofInputStream())
                 val status = response.statusCode()
                 when {
-                    status in 200..299 -> return response.body()
+                    status in 200..299 -> return response.body().use { stream ->
+                        val out = java.io.ByteArrayOutputStream()
+                        val buf = ByteArray(8 * 1024)
+                        var total = 0
+                        while (true) {
+                            val n = stream.read(buf)
+                            if (n < 0) break
+                            total += n
+                            check(total <= maxBytes) {
+                                "response from $url exceeds $maxBytes bytes (read >= $total so far)"
+                            }
+                            out.write(buf, 0, n)
+                        }
+                        out.toByteArray()
+                    }
                     // 4xx is deterministic (bad ref / typo'd path / private repo). Don't burn
                     // retries — surface the real cause.
                     status in 400..499 ->
                         throw IllegalStateException("GET $url → HTTP $status (4xx, not retried)")
-                    // 5xx and anything else non-2xx: transient class. IOException makes the
-                    // retry catch below pick it up; surface as ISE after the last attempt.
                     else -> throw IOException("GET $url → HTTP $status")
                 }
             } catch (e: InterruptedException) {
-                // Restore interrupt status, don't retry — test runner is tearing down.
                 Thread.currentThread().interrupt()
                 throw e
             } catch (e: HttpTimeoutException) {
@@ -215,7 +270,6 @@ internal object InteropFixtureSync {
                 lastError = e
                 if (attempt < FETCH_RETRIES) println("  fetch IO error (${e.message}); retrying...")
             }
-            // Any other Throwable (incl. our IllegalStateException for 4xx) propagates.
         }
         throw IllegalStateException(
             "GET $url failed after ${FETCH_RETRIES + 1} attempts: ${lastError?.message}",
@@ -224,17 +278,7 @@ internal object InteropFixtureSync {
     }
 
     private fun resolveRepoRoot(): Path {
-        // Gradle's `tasks.test { systemProperty("interopRepoRoot", projectDir.absolutePath) }`
-        // is the canonical source. user.dir falls in line for a single-module project but
-        // explicit is safer across IDE / composite-build invocations.
         System.getProperty("interopRepoRoot")?.let { return Path.of(it).toAbsolutePath() }
         return Path.of(System.getProperty("user.dir")).toAbsolutePath()
-    }
-
-    private fun sha256Hex(bytes: ByteArray): String {
-        val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
-        return buildString(digest.size * 2) {
-            for (b in digest) append("%02x".format(b))
-        }
     }
 }

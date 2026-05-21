@@ -40,7 +40,9 @@ class InteropFixtureVerifyTest {
         @JvmStatic
         @BeforeAll
         fun setUp() {
-            cacheDir = InteropFixtureSync.ensureSynced()
+            // Source-specific overload — InteropFixtureSync is now multi-source (B3); the
+            // crypto vectors live under d4rken-org/octi's cache subdir.
+            cacheDir = InteropFixtureSync.ensureSynced("d4rken-org/octi")
         }
     }
 

@@ -72,21 +72,51 @@ If `SMOKE_SERVER_URL` is unset, tests skip cleanly via JUnit assumptions.
 
 - Compose UI tests (`runComposeUiTest`) — not wired in this project yet.
 
-## Cross-platform encryption fixtures
+## Cross-repo wire-format fixtures (multi-source)
 
-`InteropFixtureVerifyTest` pins desktop's [`PayloadEncryption`] and [`StreamingPayloadCipher`]
-against committed Android-produced ciphertext + plaintext + AAD. The fixtures live upstream in
-[`d4rken-org/octi`](https://github.com/d4rken-org/octi) (sync-core/src/test/resources/interop/);
-`fixture-lock.json` at this repo root pins a 40-char commit SHA + the SHA-256 of that commit's
-`manifest.json`. `InteropFixtureSync` fetches and verifies on first `@BeforeAll`; the cache lives
-at `.cache/interop-fixtures/<sha>/` (gitignored).
+Desktop is a cross-repo fixture consumer for both producers in the network:
 
-To bump the pin, change `fixture-lock.json#ref` to a newer app-main commit, recompute
-`manifest_sha256` via `sha256sum` on the manifest at that SHA, and commit both in the same
-change. `./gradlew test` then re-fetches and re-verifies.
+| Source | Fixtures | Tests |
+|---|---|---|
+| `d4rken-org/octi` (sync-core) | Tink + streaming AEAD vectors | `InteropFixtureVerifyTest` |
+| `d4rken-org/octi-web` (published/) | MetaInfo / ClipboardInfo / FileShareInfo JSON | `WebMetaInteropTest` + `WebClipboardInteropTest` + `WebFilesInteropTest` |
 
-If you also touch `StreamingPayloadCipher` or `PayloadEncryption`, expect this test to catch
-the wire-compat break before the smoke suite does.
+`fixture-lock.json` at this repo root uses **schema v2** (multi-source):
+
+```json
+{
+  "schemaVersion": 2,
+  "sources": {
+    "d4rken-org/octi":      { "ref": "<sha40>", "manifest_sha256": "<sha256>" },
+    "d4rken-org/octi-web":  { "ref": "<sha40>", "manifest_sha256": "<sha256>" }
+  }
+}
+```
+
+`InteropFixtureSync.ensureSynced("d4rken-org/...")` fetches + verifies on first `@BeforeAll`;
+cache lives at `.cache/interop-fixtures/<owner>/<repo>/<sha>/` (gitignored). The
+double-checked-locking singleton means multiple test classes hitting different sources sync
+each source once per JVM.
+
+The parser also accepts the **legacy v1 flat shape** (`{ source, ref, manifest_sha256 }`)
+during the migration window — a future hand-edit revert to v1 still parses.
+
+To bump a pin, change `fixture-lock.json#sources[<source>].ref` to a newer commit SHA on
+that producer, recompute `manifest_sha256` via `sha256sum` on the manifest at that SHA, and
+commit both. `./gradlew test` then re-fetches and re-verifies.
+
+### `INTEROP_FIXTURE_OVERRIDES` (CI gate)
+
+Cross-repo gating workflows (octi-web's `cross-repo-verify.yml` and friends) set
+`INTEROP_FIXTURE_OVERRIDES='{"<owner>/<repo>":"<head-sha>"}'` to point one of the locked
+sources at a PR's HEAD without rewriting the lockfile. The override drops `manifestSha256`
+as a trust anchor (no committed sha can pin an arbitrary upstream commit) — per-file sha256s
+in the freshly-fetched manifest stay as the anchor. The env var is declared as a Gradle test
+input so an overridden run can't be UP-TO-DATE skipped.
+
+If you also touch `StreamingPayloadCipher` or `PayloadEncryption`, expect `InteropFixtureVerifyTest`
+to catch the wire-compat break before the smoke suite does. If you touch one of the modules
+listed above on web, expect `Web*InteropTest` to flag the change here at the consumer side.
 
 ## Behavior fixtures vs. enumeration
 
