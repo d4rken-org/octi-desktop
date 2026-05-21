@@ -18,8 +18,8 @@ set -euo pipefail
 RPC_URL="http://127.0.0.1:${RPC_PORT}"
 STATE_DIR="${STATE_DIR:-${OUT_DIR:-build/multi-connector-smoke/states}}"
 SKIP_LINK="${MULTI_CONNECTOR_SKIP_LINK:-0}"
-PEER_LABEL_A="${PEER_LABEL_A:-Pixel A}"
-PEER_LABEL_B="${PEER_LABEL_B:-Pixel B}"
+PEER_LABEL_A="${PEER_LABEL_A:-Pixel-A}"
+PEER_LABEL_B="${PEER_LABEL_B:-Pixel-B}"
 DESKTOP_LABEL="${DESKTOP_LABEL:-Multi Smoke Desktop}"
 
 if [[ "$SKIP_LINK" != "1" ]]; then

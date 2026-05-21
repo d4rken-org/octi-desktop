@@ -97,8 +97,8 @@ jobs:
       STATE_DIR: ${{ github.workspace }}/build/multi-connector-smoke/states
       XDG_CONFIG_HOME: ${{ github.workspace }}/build/multi-connector-smoke/xdg-config
       XDG_DATA_HOME: ${{ github.workspace }}/build/multi-connector-smoke/xdg-data
-      PEER_LABEL_A: 'Pixel A'
-      PEER_LABEL_B: 'Pixel B'
+      PEER_LABEL_A: 'Pixel-A'
+      PEER_LABEL_B: 'Pixel-B'
       DESKTOP_LABEL: 'Multi Smoke Desktop'
     # Track octi-server's rolling canary tag so this job surfaces wire-format drift the day it
     # lands on octi-server main, without anyone needing to bump a pinned digest. Trade-off: a
