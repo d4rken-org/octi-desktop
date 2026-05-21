@@ -26,6 +26,7 @@ import eu.darken.octi.desktop.debug.rpc.DebugRpcServer
 import eu.darken.octi.desktop.debug.rpc.DebugStateProvider
 import eu.darken.octi.desktop.di.AppGraph
 import eu.darken.octi.desktop.modules.meta.DeviceMetadataProvider
+import eu.darken.octi.desktop.storage.keystore.KeystoreUnavailableException
 import eu.darken.octi.desktop.ui.LocalAppGraph
 import eu.darken.octi.desktop.ui.clipboard.ClipboardScreen
 import eu.darken.octi.desktop.ui.dashboard.DashboardScreen
@@ -33,6 +34,9 @@ import eu.darken.octi.desktop.ui.files.FilesScreen
 import eu.darken.octi.desktop.ui.linking.LinkingScreen
 import eu.darken.octi.desktop.ui.nav.Screen
 import eu.darken.octi.desktop.ui.settings.SettingsScreen
+import eu.darken.octi.desktop.ui.startup.PassphrasePromptCanceledException
+import eu.darken.octi.desktop.ui.startup.PassphrasePromptUnavailableException
+import eu.darken.octi.desktop.ui.startup.StartupPassphrasePrompt
 import eu.darken.octi.desktop.ui.theme.OctiTheme
 import kotlin.system.exitProcess
 
@@ -53,15 +57,18 @@ fun main(args: Array<String>) {
         exitProcess(2)
     }
 
-    val graph = AppGraph.create(
-        passphrasePrompt = {
-            // TODO Phase A3 follow-up: real passphrase dialog. For MVP boot on hosts with a
-            // working OS keystore (macOS/Windows/most Linux desktops), this lambda is never
-            // invoked. Headless Linux without libsecret currently fails fast — surfaces as a
-            // friendly error in a later phase.
-            error("Passphrase fallback not yet wired with a UI prompt")
-        },
-    )
+    val graph = try {
+        createAppGraph()
+    } catch (e: PassphrasePromptCanceledException) {
+        System.err.println("Octi startup canceled.")
+        exitProcess(0)
+    } catch (e: PassphrasePromptUnavailableException) {
+        System.err.println("Octi cannot ask for the fallback passphrase: ${e.message}")
+        exitProcess(2)
+    } catch (e: KeystoreUnavailableException) {
+        System.err.println("Octi cannot unlock stored credentials: ${e.message}")
+        exitProcess(2)
+    }
     log(TAG) { "Octi Desktop ready (deviceId=${graph.deviceId.logLabel})" }
     graph.webSocketClient.start()
     graph.metaWriter.start()
@@ -104,6 +111,29 @@ fun main(args: Array<String>) {
             CompositionLocalProvider(LocalAppGraph provides graph) {
                 OctiDesktopApp()
             }
+        }
+    }
+}
+
+private fun createAppGraph(): AppGraph {
+    var retryMessage: String? = null
+    while (true) {
+        var fallbackPassphrase: CharArray? = null
+        var usedPassphraseFallback = false
+        try {
+            return AppGraph.create(
+                passphrasePrompt = {
+                    usedPassphraseFallback = true
+                    StartupPassphrasePrompt.show(retryMessage).also { fallbackPassphrase = it }
+                },
+            )
+        } catch (e: KeystoreUnavailableException) {
+            fallbackPassphrase?.fill('\u0000')
+            if (!usedPassphraseFallback) throw e
+            retryMessage = "Passphrase incorrect or saved credentials could not be decrypted."
+        } catch (e: Throwable) {
+            fallbackPassphrase?.fill('\u0000')
+            throw e
         }
     }
 }
