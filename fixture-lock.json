@@ -1,5 +1,13 @@
 {
-  "source": "d4rken-org/octi",
-  "ref": "f7e1089b5ba80590a65b6107e9b050f2caf1881a",
-  "manifest_sha256": "cfa0325bcd00f056b034b9c3795e59b33c3a2a8eb27d248aa767b46093fe666d"
+  "schemaVersion": 2,
+  "sources": {
+    "d4rken-org/octi": {
+      "ref": "f7e1089b5ba80590a65b6107e9b050f2caf1881a",
+      "manifest_sha256": "cfa0325bcd00f056b034b9c3795e59b33c3a2a8eb27d248aa767b46093fe666d"
+    },
+    "d4rken-org/octi-web": {
+      "ref": "84b9e57ac72e9b113de4c0c661e81938f8588f9d",
+      "manifest_sha256": "d5037e9c9ef02e7b36e6f69c2081a1cdd6adc398b8203e9e8c9409a5c2810bd0"
+    }
+  }
 }
