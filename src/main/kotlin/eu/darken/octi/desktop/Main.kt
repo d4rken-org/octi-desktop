@@ -26,6 +26,7 @@ import eu.darken.octi.desktop.debug.rpc.DebugRpcServer
 import eu.darken.octi.desktop.debug.rpc.DebugStateProvider
 import eu.darken.octi.desktop.di.AppGraph
 import eu.darken.octi.desktop.modules.meta.DeviceMetadataProvider
+import eu.darken.octi.desktop.protocol.encryption.CryptoBootstrap
 import eu.darken.octi.desktop.storage.keystore.KeystoreUnavailableException
 import eu.darken.octi.desktop.ui.LocalAppGraph
 import eu.darken.octi.desktop.ui.clipboard.ClipboardScreen
@@ -56,6 +57,13 @@ fun main(args: Array<String>) {
         System.err.println("Invalid CLI argument: ${e.message}")
         exitProcess(2)
     }
+
+    // Register Tink (incl. the AES-GCM-SIV Aead primitive) on the main thread before any
+    // background coroutine touches PayloadEncryption. On an already-linked launch the writer +
+    // dashboard loops fire concurrent encrypt/decrypt immediately on start(), and racing Tink's
+    // first registration intermittently threw "No PrimitiveConstructor for AesGcmSivKey". Forcing
+    // the (idempotent, class-init-serialized) bootstrap up front removes that race.
+    CryptoBootstrap.ensureInitialized()
 
     val graph = try {
         createAppGraph()
