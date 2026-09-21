@@ -10,3 +10,5 @@ local.properties
 # pinned in fixture-lock.json. Populated lazily by InteropFixtureSync before
 # the verify tests run. Never edit by hand.
 .cache/interop-fixtures/
+/.pi/*
+!/.pi/settings.json
