@@ -12,7 +12,7 @@ permissions:
 jobs:
   # Cross-OS matrix is intentional — the desktop's crypto stack (Tink with Conscrypt on x86_64,
   # BouncyCastle fallback on macOS arm64) needs verification on every shipped target. The init
-  # block in CryptoBootstrap runs an RFC 8452 vector check; running tests on macos-14 (ARM)
+  # block in CryptoBootstrap runs an RFC 8452 vector check; running tests on macos-15 (ARM)
   # proves BC's GCM-SIV is byte-compatible with Android Tink's Conscrypt output.
   #
   # macos-15-intel (Intel) is excluded here on purpose — GitHub's Intel-runner pool is small
@@ -28,7 +28,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-14, windows-2022]
+        os: [ubuntu-24.04, macos-15, windows-2022]
     env:
       # Backtick test names contain UTF-8 chars; the JVM needs a UTF-8 locale to write the
       # .class files. Linux runners default to POSIX (ASCII) in containers; macOS/Windows are

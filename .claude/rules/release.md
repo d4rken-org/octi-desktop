@@ -21,7 +21,7 @@ release-prepare.yml (workflow_dispatch)
                  └─ validate-tag                  regex + gradle.properties consistency
                  └─ build (calls build-installers.yml, channel=stable)
                        └─ build-linux             ubuntu-22.04 → .deb + .rpm + .AppImage + .tar.gz
-                       └─ build-macos-arm         macos-14    → Octi-X.Y.Z-macos-arm64.dmg
+                       └─ build-macos-arm         macos-15    → Octi-X.Y.Z-macos-arm64.dmg
                        └─ build-macos-intel       macos-15-intel → Octi-X.Y.Z-macos-x64.dmg
                        └─ build-windows           windows-2022 → Octi-X.Y.Z.msi
                  └─ release-github                aggregate + checksums.txt + softprops/action-gh-release
@@ -184,7 +184,7 @@ push to main / workflow_dispatch
         └─ compute-version              derives 0.X.Y-canary.{shortsha8} from gradle.properties + HEAD
         └─ build (calls build-installers.yml, channel=canary)
               └─ build-linux            ubuntu-22.04 → octi-canary_*.deb + .rpm + Octi-canary.AppImage + .tar.gz
-              └─ build-macos-arm        macos-14    → Octi-canary-macos-arm64.dmg
+              └─ build-macos-arm        macos-15    → Octi-canary-macos-arm64.dmg
               └─ build-macos-intel      macos-15-intel → Octi-canary-macos-x64.dmg
               └─ build-windows          windows-2022 → Octi-canary.msi
         └─ publish-canary               mint App token, stale-SHA guard, force-move `canary` tag,
