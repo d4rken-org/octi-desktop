@@ -39,7 +39,7 @@ env:
 jobs:
   verify-octi:
     name: Verify app-main decodes this PR's wire bytes
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout this repo at PR head
@@ -143,7 +143,7 @@ jobs:
 
   verify-octi-web:
     name: Verify octi-web decodes this PR's wire bytes
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout this repo at PR head
